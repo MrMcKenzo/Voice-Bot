@@ -51,6 +51,7 @@ const poolChannelArchive = new Map();
 const voiceChannelOwners = new Map();
 const voiceChannelPermissionSnapshots = new Map();
 const setupSessions = new Map();
+let botOwnerIds = new Set();
 let systemFontRendererAvailable = null;
 const cardTheme = {
   accent: [249, 115, 22, 255],
@@ -776,7 +777,7 @@ async function buildTopHostsCard(guild, limit = 10) {
     title: 'Top Voice Room Hosts',
     description: fields.length > 1 ? `Showing the top ${fields.length} host(s).` : null,
     fields,
-    footer: 'Only server managers can view this leaderboard. Active sessions are included in total time.',
+    footer: 'Server managers, the access role, and the bot owner can view this leaderboard. Active sessions are included in total time.',
   }, 'top-hosts');
 }
 
@@ -2451,7 +2452,7 @@ async function handleSetupCheckCommand(interaction) {
   }
 
   if (!canManageSetup(interaction)) {
-    await interaction.reply({ files: [buildStatusCard('Setup Health Check', 'You need Manage Server, Manage Channels, or the configured access role to check setup health.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ files: [buildStatusCard('Setup Health Check', 'You need Manage Server, Manage Channels, the configured access role, or bot owner access to check setup health.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
@@ -2477,7 +2478,7 @@ async function handleSetupAutoCreateCommand(interaction) {
   }
 
   if (!canManageSetup(interaction)) {
-    await interaction.reply({ files: [buildStatusCard('Auto-create Setup', 'You need Manage Server, Manage Channels, or the configured access role to change auto-create settings.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ files: [buildStatusCard('Auto-create Setup', 'You need Manage Server, Manage Channels, the configured access role, or bot owner access to change auto-create settings.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
@@ -2665,15 +2666,15 @@ function buildHelpCard(interaction, page = 'general') {
     }
 
     if (!canRunLogs) {
-      notes.push('Log setup requires Manage Server, Manage Channels, Moderate Members, or the configured access role.');
+      notes.push('Log setup requires Manage Server, Manage Channels, Moderate Members, the configured access role, or bot owner access.');
     }
 
     if (!canRunTopHosts) {
-      notes.push('Top hosts requires Manage Server, Manage Channels, or the configured access role.');
+      notes.push('Top hosts requires Manage Server, Manage Channels, the configured access role, or bot owner access.');
     }
 
     if (!canRunModeratorOverride) {
-      notes.push('Moderator override requires Manage Server, Manage Channels, Moderate Members, or the configured access role.');
+      notes.push('Moderator override requires Manage Server, Manage Channels, Moderate Members, the configured access role, or bot owner access.');
     }
   }
 
@@ -2709,7 +2710,7 @@ function buildHelpCard(interaction, page = 'general') {
         });
       }
     } else {
-      notes.push('Setup commands require Manage Server, Manage Channels, or the configured access role.');
+      notes.push('Setup commands require Manage Server, Manage Channels, the configured access role, or bot owner access.');
     }
   }
 
@@ -2798,7 +2799,7 @@ async function handleTopHostsCommand(interaction) {
 
   if (!canViewTopHosts(interaction)) {
     await interaction.reply({
-      files: [buildStatusCard('Top Hosts', 'You need Manage Server, Manage Channels, or the configured access role to view top voice room hosts.', { type: 'error', badge: 'ERR' })],
+      files: [buildStatusCard('Top Hosts', 'You need Manage Server, Manage Channels, the configured access role, or bot owner access to view top voice room hosts.', { type: 'error', badge: 'ERR' })],
     });
     return;
   }
@@ -2897,7 +2898,7 @@ async function handleLogsCommand(interaction) {
 
   if (!canManageLogs(interaction)) {
     await interaction.reply({
-      files: [buildStatusCard('Logging', 'You need Manage Server, Manage Channels, Moderate Members, or the configured access role to change voice logs.', { type: 'error', badge: 'ERR' })],
+      files: [buildStatusCard('Logging', 'You need Manage Server, Manage Channels, Moderate Members, the configured access role, or bot owner access to change voice logs.', { type: 'error', badge: 'ERR' })],
     });
     return;
   }
@@ -3121,7 +3122,7 @@ function buildModRoomHelpCard() {
         value: 'Returns an empty managed room to the archive category.',
       }
     ],
-    footer: 'Requires Manage Server, Manage Channels, Moderate Members, or the configured access role. Successful actions are audited as image cards when logging is enabled.',
+    footer: 'Requires Manage Server, Manage Channels, Moderate Members, the configured access role, or bot owner access. Successful actions are audited as image cards when logging is enabled.',
   }, 'mr-help');
 }
 
@@ -3133,7 +3134,7 @@ async function handleModRoomCommand(interaction) {
 
   if (!canUseModeratorOverride(interaction)) {
     await interaction.reply({
-      files: [buildStatusCard('Moderator Room Override', 'You need Manage Server, Manage Channels, Moderate Members, or the configured access role to use moderator room overrides.', { type: 'error', badge: 'ERR' })],
+      files: [buildStatusCard('Moderator Room Override', 'You need Manage Server, Manage Channels, Moderate Members, the configured access role, or bot owner access to use moderator room overrides.', { type: 'error', badge: 'ERR' })],
     });
     return;
   }
@@ -3525,6 +3526,27 @@ function memberHasRole(member, roleId) {
   return false;
 }
 
+function getConfiguredBotOwnerIds() {
+  return [
+    process.env.BOT_OWNER_ID,
+    process.env.BOT_OWNER_IDS,
+    process.env.OWNER_USER_ID,
+    process.env.OWNER_USER_IDS,
+  ]
+    .filter(Boolean)
+    .flatMap((value) => String(value).split(/[\s,]+/))
+    .filter(isDiscordId);
+}
+
+function getBotOwnerIds() {
+  return new Set([...botOwnerIds, ...getConfiguredBotOwnerIds()]);
+}
+
+function isBotOwner(interaction) {
+  const userId = interaction.user?.id || interaction.member?.id;
+  return isDiscordId(userId) && getBotOwnerIds().has(userId);
+}
+
 function hasCommandAccessRole(interaction) {
   if (!interaction.guild) {
     return false;
@@ -3539,7 +3561,7 @@ function canConfigureAccessRole(interaction) {
 }
 
 function canManageSetup(interaction) {
-  return hasNativeSetupPermission(interaction) || hasCommandAccessRole(interaction);
+  return hasNativeSetupPermission(interaction) || hasCommandAccessRole(interaction) || isBotOwner(interaction);
 }
 
 function canViewTopHosts(interaction) {
@@ -3547,11 +3569,11 @@ function canViewTopHosts(interaction) {
 }
 
 function canManageLogs(interaction) {
-  return hasNativeLogPermission(interaction) || hasCommandAccessRole(interaction);
+  return hasNativeLogPermission(interaction) || hasCommandAccessRole(interaction) || isBotOwner(interaction);
 }
 
 function canUseModeratorOverride(interaction) {
-  return hasNativeLogPermission(interaction) || hasCommandAccessRole(interaction);
+  return hasNativeLogPermission(interaction) || hasCommandAccessRole(interaction) || isBotOwner(interaction);
 }
 
 function canControlOwnedRoom(interaction, ownerId) {
@@ -3657,7 +3679,7 @@ async function handleSetupCommand(interaction) {
   }
 
   if (!canManageSetup(interaction)) {
-    await interaction.reply({ files: [buildStatusCard('Voice Room Setup', 'You need Manage Server, Manage Channels, or the configured access role to run setup.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ files: [buildStatusCard('Voice Room Setup', 'You need Manage Server, Manage Channels, the configured access role, or bot owner access to run setup.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
@@ -3694,7 +3716,7 @@ async function handleSetupSelect(interaction) {
   }
 
   if (!canManageSetup(interaction)) {
-    await interaction.reply({ files: [buildStatusCard('Voice Room Setup', 'You need Manage Server, Manage Channels, or the configured access role to change setup.', { type: 'error', badge: 'ERR' })], ephemeral: true });
+    await interaction.reply({ files: [buildStatusCard('Voice Room Setup', 'You need Manage Server, Manage Channels, the configured access role, or bot owner access to change setup.', { type: 'error', badge: 'ERR' })], ephemeral: true });
     return;
   }
 
@@ -3775,7 +3797,7 @@ async function handleSetupListCommand(interaction) {
   }
 
   if (!canManageSetup(interaction)) {
-    await interaction.reply({ files: [buildStatusCard('Saved Voice Room Setups', 'You need Manage Server, Manage Channels, or the configured access role to view setup.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ files: [buildStatusCard('Saved Voice Room Setups', 'You need Manage Server, Manage Channels, the configured access role, or bot owner access to view setup.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
@@ -3823,7 +3845,7 @@ async function handleSetupRemoveCommand(interaction) {
   }
 
   if (!canManageSetup(interaction)) {
-    await interaction.reply({ files: [buildStatusCard('Remove Voice Room Setup', 'You need Manage Server, Manage Channels, or the configured access role to remove setup.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ files: [buildStatusCard('Remove Voice Room Setup', 'You need Manage Server, Manage Channels, the configured access role, or bot owner access to remove setup.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
@@ -3873,7 +3895,7 @@ async function handleSetupRemoveSelect(interaction) {
   }
 
   if (!canManageSetup(interaction)) {
-    await interaction.reply({ files: [buildStatusCard('Remove Voice Room Setup', 'You need Manage Server, Manage Channels, or the configured access role to remove setup.', { type: 'error', badge: 'ERR' })], ephemeral: true });
+    await interaction.reply({ files: [buildStatusCard('Remove Voice Room Setup', 'You need Manage Server, Manage Channels, the configured access role, or bot owner access to remove setup.', { type: 'error', badge: 'ERR' })], ephemeral: true });
     return;
   }
 
@@ -3911,6 +3933,51 @@ async function handleSetupRemoveSelect(interaction) {
     files: [buildStatusCard('Remove Voice Room Setup', `Removed setup for ${removedCategory ? channelLabel(interaction.guild, removedCategory.requestChannelId) : 'that request channel'}.`, { type: 'success', badge: 'SET' })],
     components: [],
   });
+}
+
+function collectApplicationOwnerIds(owner) {
+  const ownerIds = new Set();
+  if (!owner) {
+    return ownerIds;
+  }
+
+  if (isDiscordId(owner.ownerId)) {
+    ownerIds.add(owner.ownerId);
+  }
+
+  if (!owner.members && isDiscordId(owner.id) && (owner.username || owner.globalName || owner.tag)) {
+    ownerIds.add(owner.id);
+  }
+
+  if (ownerIds.size === 0 && owner.members && typeof owner.members.values === 'function') {
+    for (const member of owner.members.values()) {
+      if (isDiscordId(member.user?.id)) {
+        ownerIds.add(member.user.id);
+      } else if (isDiscordId(member.id)) {
+        ownerIds.add(member.id);
+      }
+    }
+  }
+
+  return ownerIds;
+}
+
+async function refreshBotOwnerIds() {
+  try {
+    const application = client.application?.fetch
+      ? await client.application.fetch()
+      : client.application;
+    botOwnerIds = collectApplicationOwnerIds(application?.owner || client.application?.owner);
+    const ownerCount = getBotOwnerIds().size;
+
+    if (ownerCount > 0) {
+      console.log(`Loaded ${ownerCount} bot owner id(s) for command access.`);
+    } else {
+      console.warn('Could not detect a bot owner. Set BOT_OWNER_ID in .env if owner access is needed.');
+    }
+  } catch (error) {
+    console.warn('Could not fetch the Discord application owner. Set BOT_OWNER_ID in .env if owner access is needed:', error);
+  }
 }
 
 async function registerGlobalCommands() {
@@ -3985,6 +4052,7 @@ client.once(Events.ClientReady, async () => {
     console.log(`Invite link: https://discord.com/api/oauth2/authorize?client_id=${clientId}&scope=applications.commands%20bot&permissions=${botPermissionBits.toString()}`);
   }
 
+  await refreshBotOwnerIds();
   await registerGlobalCommands();
 
   for (const guild of client.guilds.cache.values()) {
