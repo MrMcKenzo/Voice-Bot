@@ -112,7 +112,6 @@ const guildCommands = [
     name: 'tophosts',
     description: 'Show the top voice room hosts',
     type: ApplicationCommandType.ChatInput,
-    default_member_permissions: setupPermissionBits.toString(),
     dm_permission: false,
     options: [
       {
@@ -264,31 +263,48 @@ const guildCommands = [
     ],
   },
   {
+    name: 'access-role',
+    description: 'Set the role that can use bot admin commands',
+    type: ApplicationCommandType.ChatInput,
+    default_member_permissions: setupPermissionBits.toString(),
+    dm_permission: false,
+    options: [
+      {
+        name: 'role',
+        description: 'Role that can use bot admin and moderator commands',
+        type: ApplicationCommandOptionType.Role,
+        required: false,
+      },
+      {
+        name: 'clear',
+        description: 'Clear the saved access role',
+        type: ApplicationCommandOptionType.Boolean,
+        required: false,
+      },
+    ],
+  },
+  {
     name: 'setup',
     description: 'Set up an automatic voice room pool with menus',
     type: ApplicationCommandType.ChatInput,
-    default_member_permissions: setupPermissionBits.toString(),
     dm_permission: false,
   },
   {
     name: 'setup-list',
     description: 'Show the saved automatic voice room setups',
     type: ApplicationCommandType.ChatInput,
-    default_member_permissions: setupPermissionBits.toString(),
     dm_permission: false,
   },
   {
     name: 'setup-check',
     description: 'Check saved voice room setups for missing channels, empty pools, and bot permissions',
     type: ApplicationCommandType.ChatInput,
-    default_member_permissions: setupPermissionBits.toString(),
     dm_permission: false,
   },
   {
     name: 'setup-autocreate',
     description: 'Enable or disable automatic archive room creation for a setup',
     type: ApplicationCommandType.ChatInput,
-    default_member_permissions: setupPermissionBits.toString(),
     dm_permission: false,
     options: [
       {
@@ -318,7 +334,6 @@ const guildCommands = [
     name: 'setup-remove',
     description: 'Remove an automatic voice room setup',
     type: ApplicationCommandType.ChatInput,
-    default_member_permissions: setupPermissionBits.toString(),
     dm_permission: false,
   },
 ];
@@ -421,6 +436,18 @@ function ensureGuildState(guildId) {
   }
 
   guildState.voiceLogs.enabled = Boolean(guildState.voiceLogs.enabled && guildState.voiceLogs.channelId);
+
+  if (!isDiscordId(guildState.commandAccessRoleId)) {
+    guildState.commandAccessRoleId = null;
+  }
+
+  if (!isDiscordId(guildState.commandAccessRoleUpdatedBy)) {
+    guildState.commandAccessRoleUpdatedBy = null;
+  }
+
+  guildState.commandAccessRoleUpdatedAt = typeof guildState.commandAccessRoleUpdatedAt === 'string'
+    ? guildState.commandAccessRoleUpdatedAt
+    : null;
 
   if (!guildState.hostStats || typeof guildState.hostStats !== 'object' || Array.isArray(guildState.hostStats)) {
     guildState.hostStats = {};
@@ -565,6 +592,20 @@ function saveVoiceLogSettings(guildId, settings) {
   };
   saveState();
   return getVoiceLogSettings(guildId);
+}
+
+function getCommandAccessRoleId(guildId) {
+  const guildState = ensureGuildState(guildId);
+  return isDiscordId(guildState.commandAccessRoleId) ? guildState.commandAccessRoleId : null;
+}
+
+function saveCommandAccessRole(guildId, roleId, updatedBy) {
+  const guildState = ensureGuildState(guildId);
+  guildState.commandAccessRoleId = isDiscordId(roleId) ? roleId : null;
+  guildState.commandAccessRoleUpdatedBy = isDiscordId(updatedBy) ? updatedBy : null;
+  guildState.commandAccessRoleUpdatedAt = new Date().toISOString();
+  saveState();
+  return getCommandAccessRoleId(guildId);
 }
 
 function toIsoDate(value = new Date()) {
@@ -1221,7 +1262,7 @@ function buildCapacityCard(currentLimit) {
     title: 'Voice Channel Capacity',
     description: 'Choose how many users can join this voice channel.',
     fields: [{ name: 'Current limit', value: `${current}` }],
-    footer: 'Only the channel owner can change this setting.',
+    footer: 'Only the channel owner or bot access role can change this setting.',
   }, 'capacity');
 }
 
@@ -1352,7 +1393,7 @@ async function notifyNewOwner(voiceChannel, newOwner, options = {}) {
       name: 'Owner controls',
       value: 'Use the user-limit selector below, or transfer ownership to another member in this room.',
     }],
-    footer: 'Only the current room owner can use these controls.',
+    footer: 'Only the current room owner or bot access role can use these controls.',
   }, 'owner-updated');
 
   const components = buildOwnerControlComponents(voiceChannel.id);
@@ -1381,7 +1422,7 @@ async function notifyNewOwner(voiceChannel, newOwner, options = {}) {
           name: 'Owner controls',
           value: 'Use the user-limit selector below, or transfer ownership to another member in this room.',
         }],
-        footer: 'Only the current room owner can use these controls.',
+        footer: 'Only the current room owner or bot access role can use these controls.',
       }, 'owner-updated')],
       components,
     });
@@ -1400,7 +1441,7 @@ async function notifyNewOwner(voiceChannel, newOwner, options = {}) {
           name: 'Owner controls',
           value: 'Use the user-limit selector below, or transfer ownership to another member in this room.',
         }],
-        footer: 'Only the current room owner can use these controls.',
+        footer: 'Only the current room owner or bot access role can use these controls.',
       }, 'owner-updated')],
       components,
     }).catch(() => {});
@@ -1416,7 +1457,7 @@ async function notifyNewOwner(voiceChannel, newOwner, options = {}) {
         name: 'Owner controls',
         value: 'Use the user-limit selector below, or transfer ownership to another member in this room.',
       }],
-      footer: 'Only the current room owner can use these controls.',
+      footer: 'Only the current room owner or bot access role can use these controls.',
     }, 'owner-updated')],
   }).catch(() => {});
 }
@@ -2410,7 +2451,7 @@ async function handleSetupCheckCommand(interaction) {
   }
 
   if (!canManageSetup(interaction)) {
-    await interaction.reply({ files: [buildStatusCard('Setup Health Check', 'You need Manage Server or Manage Channels permission to check setup health.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ files: [buildStatusCard('Setup Health Check', 'You need Manage Server, Manage Channels, or the configured access role to check setup health.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
@@ -2436,7 +2477,7 @@ async function handleSetupAutoCreateCommand(interaction) {
   }
 
   if (!canManageSetup(interaction)) {
-    await interaction.reply({ files: [buildStatusCard('Auto-create Setup', 'You need Manage Server or Manage Channels permission to change auto-create settings.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ files: [buildStatusCard('Auto-create Setup', 'You need Manage Server, Manage Channels, or the configured access role to change auto-create settings.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
@@ -2540,6 +2581,7 @@ function formatHelpRequester(interaction) {
 function buildHelpCard(interaction, page = 'general') {
   const activePage = getHelpPage(page);
   const canRunSetup = canManageSetup(interaction);
+  const canConfigureRole = canConfigureAccessRole(interaction);
   const canRunLogs = canManageLogs(interaction);
   const canRunTopHosts = canViewTopHosts(interaction);
   const canRunModeratorOverride = canUseModeratorOverride(interaction);
@@ -2623,15 +2665,15 @@ function buildHelpCard(interaction, page = 'general') {
     }
 
     if (!canRunLogs) {
-      notes.push('Log setup requires Manage Server, Manage Channels, or Moderate Members permission.');
+      notes.push('Log setup requires Manage Server, Manage Channels, Moderate Members, or the configured access role.');
     }
 
     if (!canRunTopHosts) {
-      notes.push('Top hosts requires Manage Server or Manage Channels permission.');
+      notes.push('Top hosts requires Manage Server, Manage Channels, or the configured access role.');
     }
 
     if (!canRunModeratorOverride) {
-      notes.push('Moderator override requires Manage Server, Manage Channels, or Moderate Members permission.');
+      notes.push('Moderator override requires Manage Server, Manage Channels, Moderate Members, or the configured access role.');
     }
   }
 
@@ -2659,8 +2701,15 @@ function buildHelpCard(interaction, page = 'general') {
           value: 'Removes a saved voice-room setup.',
         }
       );
+
+      if (canConfigureRole) {
+        fields.push({
+          name: '/access-role role:@Role',
+          value: 'Sets the role that can use bot admin and moderator commands. Use clear:true to remove it.',
+        });
+      }
     } else {
-      notes.push('Setup commands require Manage Server or Manage Channels permission.');
+      notes.push('Setup commands require Manage Server, Manage Channels, or the configured access role.');
     }
   }
 
@@ -2749,7 +2798,7 @@ async function handleTopHostsCommand(interaction) {
 
   if (!canViewTopHosts(interaction)) {
     await interaction.reply({
-      files: [buildStatusCard('Top Hosts', 'You need Manage Server or Manage Channels permission to view top voice room hosts.', { type: 'error', badge: 'ERR' })],
+      files: [buildStatusCard('Top Hosts', 'You need Manage Server, Manage Channels, or the configured access role to view top voice room hosts.', { type: 'error', badge: 'ERR' })],
     });
     return;
   }
@@ -2761,6 +2810,62 @@ async function handleTopHostsCommand(interaction) {
   await interaction.editReply({
     attachments: [],
     files: [await buildTopHostsCard(interaction.guild, limit)],
+  });
+}
+
+async function handleAccessRoleCommand(interaction) {
+  if (!interaction.guild) {
+    await interaction.reply({ files: [buildStatusCard('Access Role', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
+    return;
+  }
+
+  if (!canConfigureAccessRole(interaction)) {
+    await interaction.reply({
+      files: [buildStatusCard('Access Role', 'You need Manage Server or Manage Channels permission to change the bot access role.', { type: 'error', badge: 'ERR' })],
+    });
+    return;
+  }
+
+  const requestedRole = interaction.options.getRole('role');
+  const shouldClear = interaction.options.getBoolean('clear') === true;
+  const currentRoleId = getCommandAccessRoleId(interaction.guild.id);
+
+  if (requestedRole && shouldClear) {
+    await interaction.reply({
+      files: [buildStatusCard('Access Role', 'Choose a role or use clear:true, not both.', { type: 'error', badge: 'ERR' })],
+    });
+    return;
+  }
+
+  if (shouldClear) {
+    saveCommandAccessRole(interaction.guild.id, null, interaction.user.id);
+    await interaction.reply({
+      files: [buildStatusCard('Access Role', 'Cleared the bot access role. Built-in Discord permissions are now required again.', { type: 'success', badge: 'ROLE' })],
+    });
+    return;
+  }
+
+  if (requestedRole) {
+    if (requestedRole.id === interaction.guild.id) {
+      await interaction.reply({
+        files: [buildStatusCard('Access Role', 'Choose a specific role, not @everyone.', { type: 'error', badge: 'ERR' })],
+      });
+      return;
+    }
+
+    saveCommandAccessRole(interaction.guild.id, requestedRole.id, interaction.user.id);
+    await interaction.reply({
+      files: [buildStatusCard('Access Role', `${requestedRole} can now use bot admin and moderator commands.`, { type: 'success', badge: 'ROLE' })],
+    });
+    return;
+  }
+
+  await interaction.reply({
+    files: [buildStatusCard('Access Role', currentRoleId
+      ? `Current bot access role: <@&${currentRoleId}>.`
+      : 'No bot access role is configured yet.', {
+      badge: 'ROLE',
+    })],
   });
 }
 
@@ -2792,7 +2897,7 @@ async function handleLogsCommand(interaction) {
 
   if (!canManageLogs(interaction)) {
     await interaction.reply({
-      files: [buildStatusCard('Logging', 'You need Manage Server, Manage Channels, or Moderate Members permission to change voice logs.', { type: 'error', badge: 'ERR' })],
+      files: [buildStatusCard('Logging', 'You need Manage Server, Manage Channels, Moderate Members, or the configured access role to change voice logs.', { type: 'error', badge: 'ERR' })],
     });
     return;
   }
@@ -3016,7 +3121,7 @@ function buildModRoomHelpCard() {
         value: 'Returns an empty managed room to the archive category.',
       }
     ],
-    footer: 'Requires Manage Server, Manage Channels, or Moderate Members permission. Successful actions are audited as image cards when logging is enabled.',
+    footer: 'Requires Manage Server, Manage Channels, Moderate Members, or the configured access role. Successful actions are audited as image cards when logging is enabled.',
   }, 'mr-help');
 }
 
@@ -3028,7 +3133,7 @@ async function handleModRoomCommand(interaction) {
 
   if (!canUseModeratorOverride(interaction)) {
     await interaction.reply({
-      files: [buildStatusCard('Moderator Room Override', 'You need Manage Server, Manage Channels, or Moderate Members permission to use moderator room overrides.', { type: 'error', badge: 'ERR' })],
+      files: [buildStatusCard('Moderator Room Override', 'You need Manage Server, Manage Channels, Moderate Members, or the configured access role to use moderator room overrides.', { type: 'error', badge: 'ERR' })],
     });
     return;
   }
@@ -3202,7 +3307,7 @@ async function transferVoiceChannelOwnership({ guild, voiceChannel, actorMember,
   }
 
   if (!allowOverride && actorMember.id !== ownerId) {
-    return { ok: false, message: 'Only the current room owner can transfer ownership.' };
+    return { ok: false, message: 'Only the current room owner or bot access role can transfer ownership.' };
   }
 
   const targetMember = targetUserId ? await guild.members.fetch(targetUserId).catch(() => null) : null;
@@ -3214,8 +3319,8 @@ async function transferVoiceChannelOwnership({ guild, voiceChannel, actorMember,
     return { ok: false, message: 'Room ownership can only be transferred to a real member.' };
   }
 
-  if (targetMember.id === actorMember.id) {
-    return { ok: false, message: 'You already own this voice room.' };
+  if (targetMember.id === ownerId) {
+    return { ok: false, message: 'That member already owns this voice room.' };
   }
 
   if (targetMember.voice?.channelId !== voiceChannel.id) {
@@ -3244,19 +3349,22 @@ async function handleTransferOwnerCommand(interaction) {
     return;
   }
 
-  if (interaction.member.id !== ownerId) {
-    await interaction.reply({ files: [buildStatusCard('Transfer Ownership', 'Only the current room owner can transfer ownership.', { type: 'error', badge: 'ERR' })] });
+  if (!canControlOwnedRoom(interaction, ownerId)) {
+    await interaction.reply({ files: [buildStatusCard('Transfer Ownership', 'Only the current room owner or bot access role can transfer ownership.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
   await interaction.deferReply();
 
   const targetUser = interaction.options.getUser('member');
+  const isOwnerAction = interaction.member.id === ownerId;
+  const previousOwner = isOwnerAction ? interaction.member : await interaction.guild.members.fetch(ownerId).catch(() => null);
   const result = await transferVoiceChannelOwnership({
     guild: interaction.guild,
     voiceChannel: memberVoiceChannel,
     actorMember: interaction.member,
     targetUserId: targetUser?.id,
+    allowOverride: !isOwnerAction,
   });
 
   if (!result.ok) {
@@ -3265,8 +3373,9 @@ async function handleTransferOwnerCommand(interaction) {
   }
 
   await notifyNewOwner(memberVoiceChannel, result.targetMember, {
-    previousOwner: interaction.member,
-    reason: 'manual',
+    previousOwner,
+    reason: isOwnerAction ? 'manual' : 'override',
+    moderator: isOwnerAction ? null : interaction.member,
   });
 
   await interaction.editReply({
@@ -3297,8 +3406,8 @@ async function handleRenameRoomCommand(interaction) {
     return;
   }
 
-  if (interaction.member.id !== ownerId) {
-    await interaction.reply({ files: [buildStatusCard('Rename Room', 'Only the current room owner can rename this voice room.', { type: 'error', badge: 'ERR' })] });
+  if (!canControlOwnedRoom(interaction, ownerId)) {
+    await interaction.reply({ files: [buildStatusCard('Rename Room', 'Only the current room owner or bot access role can rename this voice room.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
@@ -3340,8 +3449,8 @@ async function handleTransferOwnerSelect(interaction) {
     return;
   }
 
-  if (interaction.member.id !== ownerId) {
-    await interaction.reply({ files: [buildStatusCard('Transfer Ownership', 'Only the current room owner can use this transfer menu.', { type: 'error', badge: 'ERR' })], ephemeral: true });
+  if (!canControlOwnedRoom(interaction, ownerId)) {
+    await interaction.reply({ files: [buildStatusCard('Transfer Ownership', 'Only the current room owner or bot access role can use this transfer menu.', { type: 'error', badge: 'ERR' })], ephemeral: true });
     return;
   }
 
@@ -3353,11 +3462,14 @@ async function handleTransferOwnerSelect(interaction) {
 
   await interaction.deferReply();
 
+  const isOwnerAction = interaction.member.id === ownerId;
+  const previousOwner = isOwnerAction ? interaction.member : await interaction.guild.members.fetch(ownerId).catch(() => null);
   const result = await transferVoiceChannelOwnership({
     guild: interaction.guild,
     voiceChannel,
     actorMember: interaction.member,
     targetUserId: interaction.values[0],
+    allowOverride: !isOwnerAction,
   });
 
   if (!result.ok) {
@@ -3366,8 +3478,9 @@ async function handleTransferOwnerSelect(interaction) {
   }
 
   await notifyNewOwner(voiceChannel, result.targetMember, {
-    previousOwner: interaction.member,
-    reason: 'manual',
+    previousOwner,
+    reason: isOwnerAction ? 'manual' : 'override',
+    moderator: isOwnerAction ? null : interaction.member,
   });
 
   await interaction.editReply({
@@ -3376,11 +3489,57 @@ async function handleTransferOwnerSelect(interaction) {
   });
 }
 
-function canManageSetup(interaction) {
+function hasNativeSetupPermission(interaction) {
   return Boolean(
     interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ||
       interaction.memberPermissions?.has(PermissionFlagsBits.ManageChannels)
   );
+}
+
+function hasNativeLogPermission(interaction) {
+  return Boolean(
+    interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ||
+      interaction.memberPermissions?.has(PermissionFlagsBits.ManageChannels) ||
+      interaction.memberPermissions?.has(PermissionFlagsBits.ModerateMembers)
+  );
+}
+
+function memberHasRole(member, roleId) {
+  if (!member || !isDiscordId(roleId)) {
+    return false;
+  }
+
+  const roles = member.roles;
+  if (roles?.cache?.has(roleId)) {
+    return true;
+  }
+
+  if (typeof roles?.has === 'function') {
+    return roles.has(roleId);
+  }
+
+  if (Array.isArray(roles)) {
+    return roles.includes(roleId);
+  }
+
+  return false;
+}
+
+function hasCommandAccessRole(interaction) {
+  if (!interaction.guild) {
+    return false;
+  }
+
+  const roleId = getCommandAccessRoleId(interaction.guild.id);
+  return memberHasRole(interaction.member, roleId);
+}
+
+function canConfigureAccessRole(interaction) {
+  return hasNativeSetupPermission(interaction);
+}
+
+function canManageSetup(interaction) {
+  return hasNativeSetupPermission(interaction) || hasCommandAccessRole(interaction);
 }
 
 function canViewTopHosts(interaction) {
@@ -3388,19 +3547,15 @@ function canViewTopHosts(interaction) {
 }
 
 function canManageLogs(interaction) {
-  return Boolean(
-    interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ||
-      interaction.memberPermissions?.has(PermissionFlagsBits.ManageChannels) ||
-      interaction.memberPermissions?.has(PermissionFlagsBits.ModerateMembers)
-  );
+  return hasNativeLogPermission(interaction) || hasCommandAccessRole(interaction);
 }
 
 function canUseModeratorOverride(interaction) {
-  return Boolean(
-    interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ||
-      interaction.memberPermissions?.has(PermissionFlagsBits.ManageChannels) ||
-      interaction.memberPermissions?.has(PermissionFlagsBits.ModerateMembers)
-  );
+  return hasNativeLogPermission(interaction) || hasCommandAccessRole(interaction);
+}
+
+function canControlOwnedRoom(interaction, ownerId) {
+  return Boolean(ownerId && (interaction.member?.id === ownerId || canUseModeratorOverride(interaction)));
 }
 
 function setupSessionKey(guildId, userId) {
@@ -3502,7 +3657,7 @@ async function handleSetupCommand(interaction) {
   }
 
   if (!canManageSetup(interaction)) {
-    await interaction.reply({ files: [buildStatusCard('Voice Room Setup', 'You need Manage Server or Manage Channels permission to run setup.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ files: [buildStatusCard('Voice Room Setup', 'You need Manage Server, Manage Channels, or the configured access role to run setup.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
@@ -3539,7 +3694,7 @@ async function handleSetupSelect(interaction) {
   }
 
   if (!canManageSetup(interaction)) {
-    await interaction.reply({ files: [buildStatusCard('Voice Room Setup', 'You need Manage Server or Manage Channels permission to change setup.', { type: 'error', badge: 'ERR' })], ephemeral: true });
+    await interaction.reply({ files: [buildStatusCard('Voice Room Setup', 'You need Manage Server, Manage Channels, or the configured access role to change setup.', { type: 'error', badge: 'ERR' })], ephemeral: true });
     return;
   }
 
@@ -3620,7 +3775,7 @@ async function handleSetupListCommand(interaction) {
   }
 
   if (!canManageSetup(interaction)) {
-    await interaction.reply({ files: [buildStatusCard('Saved Voice Room Setups', 'You need Manage Server or Manage Channels permission to view setup.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ files: [buildStatusCard('Saved Voice Room Setups', 'You need Manage Server, Manage Channels, or the configured access role to view setup.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
@@ -3668,7 +3823,7 @@ async function handleSetupRemoveCommand(interaction) {
   }
 
   if (!canManageSetup(interaction)) {
-    await interaction.reply({ files: [buildStatusCard('Remove Voice Room Setup', 'You need Manage Server or Manage Channels permission to remove setup.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ files: [buildStatusCard('Remove Voice Room Setup', 'You need Manage Server, Manage Channels, or the configured access role to remove setup.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
@@ -3718,7 +3873,7 @@ async function handleSetupRemoveSelect(interaction) {
   }
 
   if (!canManageSetup(interaction)) {
-    await interaction.reply({ files: [buildStatusCard('Remove Voice Room Setup', 'You need Manage Server or Manage Channels permission to remove setup.', { type: 'error', badge: 'ERR' })], ephemeral: true });
+    await interaction.reply({ files: [buildStatusCard('Remove Voice Room Setup', 'You need Manage Server, Manage Channels, or the configured access role to remove setup.', { type: 'error', badge: 'ERR' })], ephemeral: true });
     return;
   }
 
@@ -3886,6 +4041,11 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
+    if (interaction.commandName === 'access-role') {
+      await handleAccessRoleCommand(interaction);
+      return;
+    }
+
     if (interaction.commandName === 'setup') {
       await handleSetupCommand(interaction);
       return;
@@ -3954,8 +4114,8 @@ client.on('interactionCreate', async (interaction) => {
         return;
       }
 
-      if (interaction.member.id !== ownerId) {
-        await interaction.reply({ files: [buildStatusCard('Voice Channel Capacity', 'Only the owner of this voice channel can change its capacity.', { type: 'error', badge: 'ERR' })] });
+      if (!canControlOwnedRoom(interaction, ownerId)) {
+        await interaction.reply({ files: [buildStatusCard('Voice Channel Capacity', 'Only the owner or bot access role can change this voice channel capacity.', { type: 'error', badge: 'ERR' })] });
         return;
       }
 
@@ -4010,8 +4170,8 @@ client.on('interactionCreate', async (interaction) => {
     return;
   }
 
-  if (interaction.member.id !== ownerId) {
-    await interaction.reply({ files: [buildStatusCard('Voice Channel Capacity', 'Only the owner of this voice channel can change its capacity.', { type: 'error', badge: 'ERR' })], ephemeral: true });
+  if (!canControlOwnedRoom(interaction, ownerId)) {
+    await interaction.reply({ files: [buildStatusCard('Voice Channel Capacity', 'Only the owner or bot access role can change this voice channel capacity.', { type: 'error', badge: 'ERR' })], ephemeral: true });
     return;
   }
 
