@@ -2822,7 +2822,7 @@ async function handleAccessRoleCommand(interaction) {
 
   if (!canConfigureAccessRole(interaction)) {
     await interaction.reply({
-      files: [buildStatusCard('Access Role', 'You need Manage Server or Manage Channels permission to change the bot access role.', { type: 'error', badge: 'ERR' })],
+      files: [buildStatusCard('Access Role', 'You need Manage Server, Manage Channels, or bot owner access to change the bot access role.', { type: 'error', badge: 'ERR' })],
     });
     return;
   }
@@ -3557,7 +3557,7 @@ function hasCommandAccessRole(interaction) {
 }
 
 function canConfigureAccessRole(interaction) {
-  return hasNativeSetupPermission(interaction);
+  return hasNativeSetupPermission(interaction) || isBotOwner(interaction);
 }
 
 function canManageSetup(interaction) {
@@ -3980,9 +3980,17 @@ async function refreshBotOwnerIds() {
   }
 }
 
+function buildOwnerAccessibleCommands(commands) {
+  return commands.map((command) => {
+    const commandData = { ...command };
+    delete commandData.default_member_permissions;
+    return commandData;
+  });
+}
+
 async function registerGlobalCommands() {
   try {
-    await client.application.commands.set(guildCommands);
+    await client.application.commands.set(buildOwnerAccessibleCommands(guildCommands));
     console.log('Registered global slash commands.');
   } catch (error) {
     console.warn('Could not register global slash commands:', error);
