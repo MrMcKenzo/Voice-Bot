@@ -109,6 +109,23 @@ const guildCommands = [
     dm_permission: false,
   },
   {
+    name: 'tophosts',
+    description: 'Show the top voice room hosts',
+    type: ApplicationCommandType.ChatInput,
+    default_member_permissions: setupPermissionBits.toString(),
+    dm_permission: false,
+    options: [
+      {
+        name: 'limit',
+        description: 'Number of hosts to show',
+        type: ApplicationCommandOptionType.Integer,
+        minValue: 1,
+        maxValue: 25,
+        required: false,
+      },
+    ],
+  },
+  {
     name: 'logs',
     description: 'View or change voice and moderator audit logging',
     type: ApplicationCommandType.ChatInput,
@@ -405,6 +422,25 @@ function ensureGuildState(guildId) {
 
   guildState.voiceLogs.enabled = Boolean(guildState.voiceLogs.enabled && guildState.voiceLogs.channelId);
 
+  if (!guildState.hostStats || typeof guildState.hostStats !== 'object' || Array.isArray(guildState.hostStats)) {
+    guildState.hostStats = {};
+  }
+
+  for (const [userId, stats] of Object.entries(guildState.hostStats)) {
+    if (!isDiscordId(userId) || !stats || typeof stats !== 'object' || Array.isArray(stats)) {
+      delete guildState.hostStats[userId];
+      continue;
+    }
+
+    const roomsHosted = Number(stats.roomsHosted);
+    const totalHostedMs = Number(stats.totalHostedMs);
+    stats.roomsHosted = Number.isFinite(roomsHosted) && roomsHosted > 0 ? Math.floor(roomsHosted) : 0;
+    stats.totalHostedMs = Number.isFinite(totalHostedMs) && totalHostedMs > 0 ? Math.floor(totalHostedMs) : 0;
+    stats.lastHostedAt = typeof stats.lastHostedAt === 'string' ? stats.lastHostedAt : null;
+    stats.lastRoomName = typeof stats.lastRoomName === 'string' ? stats.lastRoomName : null;
+    stats.updatedAt = typeof stats.updatedAt === 'string' ? stats.updatedAt : null;
+  }
+
   return guildState;
 }
 
@@ -531,6 +567,178 @@ function saveVoiceLogSettings(guildId, settings) {
   return getVoiceLogSettings(guildId);
 }
 
+function toIsoDate(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
+}
+
+function getHostStatsEntry(guildId, userId) {
+  if (!isDiscordId(guildId) || !isDiscordId(userId)) {
+    return null;
+  }
+
+  const guildState = ensureGuildState(guildId);
+  if (!guildState.hostStats[userId] || typeof guildState.hostStats[userId] !== 'object') {
+    guildState.hostStats[userId] = {
+      roomsHosted: 0,
+      totalHostedMs: 0,
+      lastHostedAt: null,
+      lastRoomName: null,
+      updatedAt: null,
+    };
+  }
+
+  return guildState.hostStats[userId];
+}
+
+function recordHostSessionStart(guildId, userId, voiceChannel, startedAt = new Date()) {
+  const stats = getHostStatsEntry(guildId, userId);
+  if (!stats) {
+    return;
+  }
+
+  const startedIso = toIsoDate(startedAt);
+  stats.roomsHosted += 1;
+  stats.lastHostedAt = startedIso;
+  stats.lastRoomName = voiceChannel?.name || stats.lastRoomName || null;
+  stats.updatedAt = startedIso;
+}
+
+function closeHostSession(guildId, userId, startedAt, endedAt = new Date(), roomName = null) {
+  const stats = getHostStatsEntry(guildId, userId);
+  if (!stats || !startedAt) {
+    return;
+  }
+
+  const startedMs = Date.parse(startedAt);
+  const endedDate = endedAt instanceof Date ? endedAt : new Date(endedAt);
+  const endedMs = endedDate.getTime();
+  if (Number.isFinite(startedMs) && Number.isFinite(endedMs) && endedMs > startedMs) {
+    stats.totalHostedMs += endedMs - startedMs;
+  }
+
+  const endedIso = toIsoDate(endedDate);
+  stats.lastHostedAt = endedIso;
+  stats.lastRoomName = roomName || stats.lastRoomName || null;
+  stats.updatedAt = endedIso;
+}
+
+function getActiveHostedMs(guildId, userId, nowMs = Date.now()) {
+  return Object.values(botState.activeChannels || {}).reduce((total, savedChannel) => {
+    if (savedChannel.guildId !== guildId || savedChannel.ownerId !== userId || !savedChannel.ownerSessionStartedAt) {
+      return total;
+    }
+
+    const startedMs = Date.parse(savedChannel.ownerSessionStartedAt);
+    if (!Number.isFinite(startedMs) || nowMs <= startedMs) {
+      return total;
+    }
+
+    return total + (nowMs - startedMs);
+  }, 0);
+}
+
+function getActiveHostedRoomCount(guildId, userId) {
+  return Object.values(botState.activeChannels || {}).filter(
+    (savedChannel) => savedChannel.guildId === guildId && savedChannel.ownerId === userId
+  ).length;
+}
+
+function formatHostedDuration(totalMs) {
+  const totalMinutes = Math.max(0, Math.floor(totalMs / 60000));
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+  const parts = [];
+
+  if (days > 0) {
+    parts.push(`${days}d`);
+  }
+
+  if (hours > 0 || days > 0) {
+    parts.push(`${hours}h`);
+  }
+
+  parts.push(`${minutes}m`);
+  return parts.join(' ');
+}
+
+function getTopHostRows(guild, limit = 10) {
+  const guildState = ensureGuildState(guild.id);
+  const nowMs = Date.now();
+
+  return Object.entries(guildState.hostStats || {})
+    .map(([userId, stats]) => {
+      const roomsHosted = Number(stats.roomsHosted) || 0;
+      const activeRooms = getActiveHostedRoomCount(guild.id, userId);
+      const totalHostedMs = (Number(stats.totalHostedMs) || 0) + getActiveHostedMs(guild.id, userId, nowMs);
+      return {
+        userId,
+        roomsHosted,
+        totalHostedMs,
+        activeRooms,
+        lastHostedAt: stats.lastHostedAt || null,
+        lastRoomName: stats.lastRoomName || null,
+      };
+    })
+    .filter((row) => row.roomsHosted > 0 || row.totalHostedMs > 0 || row.activeRooms > 0)
+    .sort((a, b) =>
+      b.roomsHosted - a.roomsHosted ||
+      b.totalHostedMs - a.totalHostedMs ||
+      a.userId.localeCompare(b.userId)
+    )
+    .slice(0, limit);
+}
+
+async function buildTopHostsCard(guild, limit = 10) {
+  const rows = getTopHostRows(guild, limit);
+  const members = new Map();
+
+  await Promise.all(rows.map(async (row) => {
+    const member = guild.members.cache.get(row.userId) || await guild.members.fetch(row.userId).catch(() => null);
+    members.set(row.userId, member);
+  }));
+
+  const fields = rows.map((row, index) => {
+    const member = members.get(row.userId);
+    const hostLabel = member?.user?.tag || member?.displayName || row.userId;
+    const details = [
+      `${row.roomsHosted} hosted room(s)`,
+      `${formatHostedDuration(row.totalHostedMs)} total hosted time`,
+    ];
+
+    if (row.activeRooms > 0) {
+      details.push(`${row.activeRooms} active now`);
+    }
+
+    if (row.lastRoomName) {
+      details.push(`Last room: ${row.lastRoomName}`);
+    }
+
+    return {
+      name: `#${index + 1} ${hostLabel}`,
+      value: truncateFieldValue(details.join('\n')),
+      inline: false,
+    };
+  });
+
+  if (fields.length === 0) {
+    fields.push({
+      name: 'No host stats yet',
+      value: 'Stats will appear after members start hosting managed voice rooms.',
+      inline: false,
+    });
+  }
+
+  return createCardAttachment({
+    badge: 'TOP',
+    title: 'Top Voice Room Hosts',
+    description: fields.length > 1 ? `Showing the top ${fields.length} host(s).` : null,
+    fields,
+    footer: 'Only server managers can view this leaderboard. Active sessions are included in total time.',
+  }, 'top-hosts');
+}
+
 function migrateLegacyConfig(config) {
   if (!config || !isDiscordId(config.guildId) || !Array.isArray(config.categories)) {
     return;
@@ -616,6 +824,20 @@ function normalizePermissionSnapshot(snapshot) {
     }));
 }
 
+function closeSavedHostSession(savedChannel, endedAt = new Date()) {
+  if (!savedChannel) {
+    return;
+  }
+
+  closeHostSession(
+    savedChannel.guildId,
+    savedChannel.ownerId,
+    savedChannel.ownerSessionStartedAt,
+    endedAt,
+    savedChannel.channelName || savedChannel.originalChannelName || null
+  );
+}
+
 function rememberActiveChannel(voiceChannel, ownerId, category = null, permissionSnapshot = null) {
   const existingState = botState.activeChannels[voiceChannel.id] || {};
   const poolEntry = poolChannelArchive.get(voiceChannel.id);
@@ -624,12 +846,28 @@ function rememberActiveChannel(voiceChannel, ownerId, category = null, permissio
     category?.archiveCategoryId || existingState.archiveCategoryId || poolEntry?.archiveCategoryId || null;
   const savedPermissionSnapshot = serializePermissionSnapshot(permissionSnapshot || existingState.permissionOverwrites || []);
   const originalChannelName = existingState.originalChannelName || existingState.channelName || voiceChannel.name;
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const ownerChanged = existingState.ownerId !== ownerId;
+
+  if (existingState.ownerId && ownerChanged) {
+    closeSavedHostSession(existingState, now);
+  }
+
+  const ownerSessionStartedAt = !ownerChanged && existingState.ownerSessionStartedAt
+    ? existingState.ownerSessionStartedAt
+    : nowIso;
+
+  if (ownerChanged || !existingState.ownerSessionStartedAt) {
+    recordHostSessionStart(guildId, ownerId, voiceChannel, now);
+  }
 
   botState.activeChannels[voiceChannel.id] = {
     guildId,
     channelName: voiceChannel.name,
     originalChannelName,
     ownerId,
+    ownerSessionStartedAt,
     categoryName: category?.name || existingState.categoryName || null,
     requestChannelId: category?.requestChannelId || existingState.requestChannelId || null,
     activeCategoryId: category?.activeCategoryId || existingState.activeCategoryId || voiceChannel.parentId || null,
@@ -639,7 +877,7 @@ function rememberActiveChannel(voiceChannel, ownerId, category = null, permissio
     moderatorLockedBy: existingState.moderatorLockedBy || null,
     moderatorLockedAt: existingState.moderatorLockedAt || null,
     moderatorLockPermissionOverwrites: existingState.moderatorLockPermissionOverwrites || null,
-    updatedAt: new Date().toISOString(),
+    updatedAt: nowIso,
   };
 
   voiceChannelOwners.set(voiceChannel.id, ownerId);
@@ -650,6 +888,7 @@ function rememberActiveChannel(voiceChannel, ownerId, category = null, permissio
 }
 
 function forgetActiveChannel(voiceChannelId) {
+  closeSavedHostSession(botState.activeChannels[voiceChannelId]);
   voiceChannelOwners.delete(voiceChannelId);
   voiceChannelPermissionSnapshots.delete(voiceChannelId);
   delete botState.activeChannels[voiceChannelId];
@@ -734,6 +973,7 @@ async function restoreActiveChannels(guild) {
     const voiceChannel = guild.channels.cache.get(channelId);
     if (!voiceChannel) {
       if (savedChannel.guildId === guild.id) {
+        closeSavedHostSession(savedChannel);
         voiceChannelOwners.delete(channelId);
         voiceChannelPermissionSnapshots.delete(channelId);
         delete botState.activeChannels[channelId];
@@ -744,6 +984,7 @@ async function restoreActiveChannels(guild) {
 
     const category = findCategoryForSavedChannel(savedChannel, guild.id);
     if (!category || voiceChannel.type !== ChannelType.GuildVoice) {
+      closeSavedHostSession(savedChannel);
       voiceChannelOwners.delete(channelId);
       voiceChannelPermissionSnapshots.delete(channelId);
       delete botState.activeChannels[channelId];
@@ -758,6 +999,7 @@ async function restoreActiveChannels(guild) {
     }
 
     if (voiceChannel.parentId === category.archiveCategoryId) {
+      closeSavedHostSession(savedChannel);
       voiceChannelOwners.delete(channelId);
       voiceChannelPermissionSnapshots.delete(channelId);
       delete botState.activeChannels[channelId];
@@ -767,6 +1009,7 @@ async function restoreActiveChannels(guild) {
 
     if (voiceChannel.parentId !== category.activeCategoryId) {
       console.warn(`Saved channel ${voiceChannel.name} is no longer in an active category. Removing it from state.`);
+      closeSavedHostSession(savedChannel);
       voiceChannelOwners.delete(channelId);
       voiceChannelPermissionSnapshots.delete(channelId);
       delete botState.activeChannels[channelId];
@@ -783,19 +1026,31 @@ async function restoreActiveChannels(guild) {
 
     const savedOwner = savedChannel.ownerId && members.has(savedChannel.ownerId) ? members.get(savedChannel.ownerId) : null;
     const owner = savedOwner || members.first();
+    const now = new Date();
+    const ownerChanged = savedChannel.ownerId !== owner.id;
+    const missingSessionStart = !savedChannel.ownerSessionStartedAt;
     voiceChannelOwners.set(channelId, owner.id);
 
-    if (!savedOwner || savedChannel.guildId !== guild.id) {
+    if (savedChannel.ownerId && ownerChanged) {
+      closeSavedHostSession(savedChannel, now);
+    }
+
+    if (ownerChanged || missingSessionStart) {
+      recordHostSessionStart(guild.id, owner.id, voiceChannel, now);
+    }
+
+    if (!savedOwner || savedChannel.guildId !== guild.id || ownerChanged || missingSessionStart) {
       botState.activeChannels[channelId] = {
         ...savedChannel,
         guildId: guild.id,
         channelName: voiceChannel.name,
         ownerId: owner.id,
+        ownerSessionStartedAt: ownerChanged || missingSessionStart ? now.toISOString() : savedChannel.ownerSessionStartedAt,
         categoryName: category.name,
         requestChannelId: category.requestChannelId,
         activeCategoryId: category.activeCategoryId,
         archiveCategoryId: category.archiveCategoryId,
-        updatedAt: new Date().toISOString(),
+        updatedAt: now.toISOString(),
       };
       changedState = true;
     }
@@ -2286,6 +2541,7 @@ function buildHelpCard(interaction, page = 'general') {
   const activePage = getHelpPage(page);
   const canRunSetup = canManageSetup(interaction);
   const canRunLogs = canManageLogs(interaction);
+  const canRunTopHosts = canViewTopHosts(interaction);
   const canRunModeratorOverride = canUseModeratorOverride(interaction);
   const fields = [];
   const notes = [];
@@ -2326,6 +2582,13 @@ function buildHelpCard(interaction, page = 'general') {
       });
     }
 
+    if (canRunTopHosts) {
+      fields.push({
+        name: '/tophosts limit:10',
+        value: 'Shows the top managed voice room hosts by hosted room count and total hosted time.',
+      });
+    }
+
     if (canRunModeratorOverride) {
       fields.push(
         {
@@ -2361,6 +2624,10 @@ function buildHelpCard(interaction, page = 'general') {
 
     if (!canRunLogs) {
       notes.push('Log setup requires Manage Server, Manage Channels, or Moderate Members permission.');
+    }
+
+    if (!canRunTopHosts) {
+      notes.push('Top hosts requires Manage Server or Manage Channels permission.');
     }
 
     if (!canRunModeratorOverride) {
@@ -2471,6 +2738,29 @@ async function handleRoomsCommand(interaction) {
   await interaction.editReply({
     attachments: [],
     files: [buildRoomsCard(interaction.guild)],
+  });
+}
+
+async function handleTopHostsCommand(interaction) {
+  if (!interaction.guild) {
+    await interaction.reply({ files: [buildStatusCard('Top Hosts', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
+    return;
+  }
+
+  if (!canViewTopHosts(interaction)) {
+    await interaction.reply({
+      files: [buildStatusCard('Top Hosts', 'You need Manage Server or Manage Channels permission to view top voice room hosts.', { type: 'error', badge: 'ERR' })],
+    });
+    return;
+  }
+
+  const requestedLimit = interaction.options.getInteger('limit') || 10;
+  const limit = Math.min(Math.max(requestedLimit, 1), 25);
+  await interaction.deferReply();
+
+  await interaction.editReply({
+    attachments: [],
+    files: [await buildTopHostsCard(interaction.guild, limit)],
   });
 }
 
@@ -3093,6 +3383,10 @@ function canManageSetup(interaction) {
   );
 }
 
+function canViewTopHosts(interaction) {
+  return canManageSetup(interaction);
+}
+
 function canManageLogs(interaction) {
   return Boolean(
     interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ||
@@ -3619,6 +3913,11 @@ client.on('interactionCreate', async (interaction) => {
 
     if (interaction.commandName === 'rooms') {
       await handleRoomsCommand(interaction);
+      return;
+    }
+
+    if (interaction.commandName === 'tophosts') {
+      await handleTopHostsCommand(interaction);
       return;
     }
 
