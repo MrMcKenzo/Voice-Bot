@@ -779,10 +779,13 @@ function getRankForXp(ranks, xp) {
   const normalizedXp = Math.max(0, Math.floor(Number(xp) || 0));
   let currentRank = ranks[0];
   let nextRank = null;
+  let currentIndex = 0;
 
-  for (const rank of ranks) {
+  for (let index = 0; index < ranks.length; index += 1) {
+    const rank = ranks[index];
     if (normalizedXp >= rank.xp) {
       currentRank = rank;
+      currentIndex = index;
       continue;
     }
 
@@ -790,7 +793,12 @@ function getRankForXp(ranks, xp) {
     break;
   }
 
-  return { currentRank, nextRank };
+  return {
+    currentRank,
+    nextRank,
+    currentLevel: currentIndex + 1,
+    maxLevel: ranks.length,
+  };
 }
 
 function getHostRank(xp) {
@@ -801,14 +809,33 @@ function getMemberRank(xp) {
   return getRankForXp(memberRanks, xp);
 }
 
-function formatRankProgress(ranks, xp) {
-  const normalizedXp = Math.max(0, Math.floor(Number(xp) || 0));
-  const { currentRank, nextRank } = getRankForXp(ranks, normalizedXp);
-  if (!nextRank) {
-    return `${currentRank.name} - ${normalizedXp} XP`;
+function buildXpProgressBar(currentXp, levelStartXp, nextLevelXp, width = 12) {
+  const neededXp = Math.max(1, nextLevelXp - levelStartXp);
+  const earnedXp = Math.min(Math.max(0, currentXp - levelStartXp), neededXp);
+  let filledBlocks = Math.floor((earnedXp / neededXp) * width);
+
+  if (earnedXp > 0 && filledBlocks === 0) {
+    filledBlocks = 1;
   }
 
-  return `${currentRank.name} - ${normalizedXp} XP (${nextRank.xp - normalizedXp} to ${nextRank.name})`;
+  filledBlocks = Math.min(width, filledBlocks);
+  return `[${'#'.repeat(filledBlocks)}${'-'.repeat(width - filledBlocks)}]`;
+}
+
+function formatRankProgress(ranks, xp) {
+  const normalizedXp = Math.max(0, Math.floor(Number(xp) || 0));
+  const { currentRank, nextRank, currentLevel, maxLevel } = getRankForXp(ranks, normalizedXp);
+  const title = `Level ${currentLevel}/${maxLevel}: ${currentRank.name} - ${normalizedXp} XP`;
+
+  if (!nextRank) {
+    return `${title}\n[############] Max level`;
+  }
+
+  const levelStartXp = Math.max(0, currentRank.xp || 0);
+  const neededXp = Math.max(1, nextRank.xp - levelStartXp);
+  const earnedXp = Math.min(Math.max(0, normalizedXp - levelStartXp), neededXp);
+  const progressBar = buildXpProgressBar(normalizedXp, levelStartXp, nextRank.xp);
+  return `${title}\n${progressBar} ${earnedXp}/${neededXp} XP to ${nextRank.name}`;
 }
 
 function formatHostRankProgress(xp) {
