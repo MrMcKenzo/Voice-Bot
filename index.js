@@ -36,6 +36,16 @@ const botPermissionBits =
   PermissionFlagsBits.Connect;
 const hostRoomStartXp = 25;
 const hostXpPerHostedMinute = 1;
+const memberXpPerVoiceMinute = 1;
+const memberRanks = [
+  { name: 'New Voice', xp: 0 },
+  { name: 'VC Regular', xp: 100 },
+  { name: 'Conversation Starter', xp: 250 },
+  { name: 'Room Favorite', xp: 500 },
+  { name: 'Community Voice', xp: 1000 },
+  { name: 'Server Socialite', xp: 2000 },
+  { name: 'Voice Legend', xp: 5000 },
+];
 const hostRanks = [
   { name: 'Rookie Host', xp: 0 },
   { name: 'Room Starter', xp: 100 },
@@ -139,6 +149,36 @@ const guildCommands = [
   {
     name: 'hostprofile',
     description: 'Show voice room host XP and streaks',
+    type: ApplicationCommandType.ChatInput,
+    dm_permission: false,
+    options: [
+      {
+        name: 'member',
+        description: 'Member to view, or leave blank for yourself',
+        type: ApplicationCommandOptionType.User,
+        required: false,
+      },
+    ],
+  },
+  {
+    name: 'topmembers',
+    description: 'Show the top voice room members by XP',
+    type: ApplicationCommandType.ChatInput,
+    dm_permission: false,
+    options: [
+      {
+        name: 'limit',
+        description: 'Number of members to show',
+        type: ApplicationCommandOptionType.Integer,
+        minValue: 1,
+        maxValue: 25,
+        required: false,
+      },
+    ],
+  },
+  {
+    name: 'vcprofile',
+    description: 'Show regular voice room member XP and time',
     type: ApplicationCommandType.ChatInput,
     dm_permission: false,
     options: [
@@ -514,6 +554,45 @@ function ensureGuildState(guildId) {
     stats.updatedAt = typeof stats.updatedAt === 'string' ? stats.updatedAt : null;
   }
 
+  if (!guildState.memberStats || typeof guildState.memberStats !== 'object' || Array.isArray(guildState.memberStats)) {
+    guildState.memberStats = {};
+  }
+
+  for (const [userId, stats] of Object.entries(guildState.memberStats)) {
+    if (!isDiscordId(userId) || !stats || typeof stats !== 'object' || Array.isArray(stats)) {
+      delete guildState.memberStats[userId];
+      continue;
+    }
+
+    const voiceSessions = Number(stats.voiceSessions);
+    const totalVoiceMs = Number(stats.totalVoiceMs);
+    stats.voiceSessions = Number.isFinite(voiceSessions) && voiceSessions > 0 ? Math.floor(voiceSessions) : 0;
+    stats.totalVoiceMs = Number.isFinite(totalVoiceMs) && totalVoiceMs > 0 ? Math.floor(totalVoiceMs) : 0;
+
+    const xp = Number(stats.xp);
+    stats.xp = Number.isFinite(xp) && xp > 0
+      ? Math.floor(xp)
+      : calculateMemberXp(stats.totalVoiceMs);
+
+    const currentStreakDays = Number(stats.currentStreakDays);
+    const bestStreakDays = Number(stats.bestStreakDays);
+    stats.currentStreakDays = Number.isFinite(currentStreakDays) && currentStreakDays > 0 ? Math.floor(currentStreakDays) : 0;
+    stats.bestStreakDays = Number.isFinite(bestStreakDays) && bestStreakDays > 0
+      ? Math.floor(bestStreakDays)
+      : stats.currentStreakDays;
+    stats.lastVoiceDate = isDateKey(stats.lastVoiceDate)
+      ? stats.lastVoiceDate
+      : dateKeyFromValue(stats.lastVoiceAt);
+    if (stats.lastVoiceDate && stats.currentStreakDays === 0) {
+      stats.currentStreakDays = 1;
+      stats.bestStreakDays = Math.max(stats.bestStreakDays, 1);
+    }
+
+    stats.lastVoiceAt = typeof stats.lastVoiceAt === 'string' ? stats.lastVoiceAt : null;
+    stats.lastRoomName = typeof stats.lastRoomName === 'string' ? stats.lastRoomName : null;
+    stats.updatedAt = typeof stats.updatedAt === 'string' ? stats.updatedAt : null;
+  }
+
   return guildState;
 }
 
@@ -684,16 +763,24 @@ function calculateHostedMinuteXp(durationMs) {
   return Math.max(0, Math.floor(durationMs / 60000) * hostXpPerHostedMinute);
 }
 
+function calculateMemberMinuteXp(durationMs) {
+  return Math.max(0, Math.floor(durationMs / 60000) * memberXpPerVoiceMinute);
+}
+
 function calculateHostXp(roomsHosted, totalHostedMs) {
   return (Math.max(0, Math.floor(Number(roomsHosted) || 0)) * hostRoomStartXp) + calculateHostedMinuteXp(Number(totalHostedMs) || 0);
 }
 
-function getHostRank(xp) {
+function calculateMemberXp(totalVoiceMs) {
+  return calculateMemberMinuteXp(Number(totalVoiceMs) || 0);
+}
+
+function getRankForXp(ranks, xp) {
   const normalizedXp = Math.max(0, Math.floor(Number(xp) || 0));
-  let currentRank = hostRanks[0];
+  let currentRank = ranks[0];
   let nextRank = null;
 
-  for (const rank of hostRanks) {
+  for (const rank of ranks) {
     if (normalizedXp >= rank.xp) {
       currentRank = rank;
       continue;
@@ -706,9 +793,17 @@ function getHostRank(xp) {
   return { currentRank, nextRank };
 }
 
-function formatHostRankProgress(xp) {
+function getHostRank(xp) {
+  return getRankForXp(hostRanks, xp);
+}
+
+function getMemberRank(xp) {
+  return getRankForXp(memberRanks, xp);
+}
+
+function formatRankProgress(ranks, xp) {
   const normalizedXp = Math.max(0, Math.floor(Number(xp) || 0));
-  const { currentRank, nextRank } = getHostRank(normalizedXp);
+  const { currentRank, nextRank } = getRankForXp(ranks, normalizedXp);
   if (!nextRank) {
     return `${currentRank.name} - ${normalizedXp} XP`;
   }
@@ -716,30 +811,46 @@ function formatHostRankProgress(xp) {
   return `${currentRank.name} - ${normalizedXp} XP (${nextRank.xp - normalizedXp} to ${nextRank.name})`;
 }
 
-function updateHostStreak(stats, hostedAt = new Date()) {
+function formatHostRankProgress(xp) {
+  return formatRankProgress(hostRanks, xp);
+}
+
+function formatMemberRankProgress(xp) {
+  return formatRankProgress(memberRanks, xp);
+}
+
+function updateDailyStreak(stats, dateField, activityAt = new Date()) {
   if (!stats) {
     return;
   }
 
-  const hostedDateKey = dateKeyFromValue(hostedAt);
-  if (!hostedDateKey || stats.lastHostedDate === hostedDateKey) {
+  const activityDateKey = dateKeyFromValue(activityAt);
+  if (!activityDateKey || stats[dateField] === activityDateKey) {
     return;
   }
 
-  const previousDay = dayNumberFromDateKey(stats.lastHostedDate);
-  const currentDay = dayNumberFromDateKey(hostedDateKey);
+  const previousDay = dayNumberFromDateKey(stats[dateField]);
+  const currentDay = dayNumberFromDateKey(activityDateKey);
   const continuedStreak = previousDay !== null && currentDay === previousDay + 1;
   stats.currentStreakDays = continuedStreak ? Math.max(0, Number(stats.currentStreakDays) || 0) + 1 : 1;
   stats.bestStreakDays = Math.max(Number(stats.bestStreakDays) || 0, stats.currentStreakDays);
-  stats.lastHostedDate = hostedDateKey;
+  stats[dateField] = activityDateKey;
 }
 
-function getVisibleCurrentStreakDays(stats, now = new Date()) {
-  if (!stats?.lastHostedDate) {
+function updateHostStreak(stats, hostedAt = new Date()) {
+  updateDailyStreak(stats, 'lastHostedDate', hostedAt);
+}
+
+function updateMemberStreak(stats, voiceAt = new Date()) {
+  updateDailyStreak(stats, 'lastVoiceDate', voiceAt);
+}
+
+function getVisibleCurrentStreakDays(stats, now = new Date(), dateField = 'lastHostedDate') {
+  if (!stats?.[dateField]) {
     return 0;
   }
 
-  const lastDay = dayNumberFromDateKey(stats.lastHostedDate);
+  const lastDay = dayNumberFromDateKey(stats[dateField]);
   const currentDay = dayNumberFromDateKey(dateKeyFromValue(now));
   if (lastDay === null || currentDay === null || currentDay - lastDay > 1) {
     return 0;
@@ -769,6 +880,29 @@ function getHostStatsEntry(guildId, userId) {
   }
 
   return guildState.hostStats[userId];
+}
+
+function getMemberStatsEntry(guildId, userId) {
+  if (!isDiscordId(guildId) || !isDiscordId(userId)) {
+    return null;
+  }
+
+  const guildState = ensureGuildState(guildId);
+  if (!guildState.memberStats[userId] || typeof guildState.memberStats[userId] !== 'object') {
+    guildState.memberStats[userId] = {
+      voiceSessions: 0,
+      totalVoiceMs: 0,
+      xp: 0,
+      currentStreakDays: 0,
+      bestStreakDays: 0,
+      lastVoiceAt: null,
+      lastVoiceDate: null,
+      lastRoomName: null,
+      updatedAt: null,
+    };
+  }
+
+  return guildState.memberStats[userId];
 }
 
 function recordHostSessionStart(guildId, userId, voiceChannel, startedAt = new Date()) {
@@ -808,6 +942,180 @@ function closeHostSession(guildId, userId, startedAt, endedAt = new Date(), room
   stats.updatedAt = endedIso;
 }
 
+function normalizeActiveMemberSessions(memberSessions, ownerId = null) {
+  if (!memberSessions || typeof memberSessions !== 'object' || Array.isArray(memberSessions)) {
+    return {};
+  }
+
+  return Object.entries(memberSessions).reduce((sessions, [userId, startedAt]) => {
+    const startedAtIso = typeof startedAt === 'string' ? startedAt : null;
+    if (isDiscordId(userId) && startedAtIso && !Number.isNaN(Date.parse(startedAtIso))) {
+      sessions[userId] = startedAtIso;
+    }
+    return sessions;
+  }, {});
+}
+
+function getRoomNameForSavedChannel(savedChannel, fallbackName = null) {
+  return savedChannel?.channelName || savedChannel?.originalChannelName || fallbackName || null;
+}
+
+function recordMemberSessionStart(guildId, userId, voiceChannel, startedAt = new Date()) {
+  const stats = getMemberStatsEntry(guildId, userId);
+  if (!stats) {
+    return;
+  }
+
+  const startedIso = toIsoDate(startedAt);
+  stats.voiceSessions += 1;
+  updateMemberStreak(stats, startedAt);
+  stats.lastVoiceAt = startedIso;
+  stats.lastRoomName = voiceChannel?.name || stats.lastRoomName || null;
+  stats.updatedAt = startedIso;
+}
+
+function closeMemberSession(guildId, userId, startedAt, endedAt = new Date(), roomName = null) {
+  const stats = getMemberStatsEntry(guildId, userId);
+  if (!stats || !startedAt) {
+    return;
+  }
+
+  const startedMs = Date.parse(startedAt);
+  const endedDate = endedAt instanceof Date ? endedAt : new Date(endedAt);
+  const endedMs = endedDate.getTime();
+  if (Number.isFinite(startedMs) && Number.isFinite(endedMs) && endedMs > startedMs) {
+    const durationMs = endedMs - startedMs;
+    stats.totalVoiceMs += durationMs;
+    stats.xp = Math.max(0, Math.floor(Number(stats.xp) || 0)) + calculateMemberMinuteXp(durationMs);
+    updateMemberStreak(stats, endedDate);
+  }
+
+  const endedIso = toIsoDate(endedDate);
+  stats.lastVoiceAt = endedIso;
+  stats.lastRoomName = roomName || stats.lastRoomName || null;
+  stats.updatedAt = endedIso;
+}
+
+function closeSavedMemberSession(savedChannel, userId, endedAt = new Date(), roomName = null) {
+  if (!savedChannel || !isDiscordId(userId)) {
+    return false;
+  }
+
+  const memberSessions = normalizeActiveMemberSessions(savedChannel.memberSessions, savedChannel.ownerId);
+  const startedAt = memberSessions[userId];
+  savedChannel.memberSessions = memberSessions;
+  if (!startedAt) {
+    return false;
+  }
+
+  closeMemberSession(
+    savedChannel.guildId,
+    userId,
+    startedAt,
+    endedAt,
+    roomName || getRoomNameForSavedChannel(savedChannel)
+  );
+  delete memberSessions[userId];
+  savedChannel.updatedAt = toIsoDate(endedAt);
+  return true;
+}
+
+function closeSavedMemberSessions(savedChannel, endedAt = new Date()) {
+  if (!savedChannel) {
+    return;
+  }
+
+  const memberSessions = normalizeActiveMemberSessions(savedChannel.memberSessions, savedChannel.ownerId);
+  for (const [userId, startedAt] of Object.entries(memberSessions)) {
+    closeMemberSession(
+      savedChannel.guildId,
+      userId,
+      startedAt,
+      endedAt,
+      getRoomNameForSavedChannel(savedChannel)
+    );
+  }
+
+  savedChannel.memberSessions = {};
+  savedChannel.updatedAt = toIsoDate(endedAt);
+}
+
+function syncMemberSessionsForVoiceChannel(voiceChannel, guildId, ownerId, memberSessions = {}, syncedAt = new Date()) {
+  const sessions = normalizeActiveMemberSessions(memberSessions, ownerId);
+  if (!voiceChannel?.members || !isDiscordId(guildId)) {
+    return sessions;
+  }
+
+  const activeMemberIds = new Set();
+  for (const member of voiceChannel.members.values()) {
+    if (!member.user.bot) {
+      activeMemberIds.add(member.id);
+    }
+  }
+
+  for (const [userId, startedAt] of Object.entries(sessions)) {
+    if (userId === ownerId || !activeMemberIds.has(userId)) {
+      closeMemberSession(guildId, userId, startedAt, syncedAt, voiceChannel.name);
+      delete sessions[userId];
+    }
+  }
+
+  const syncedIso = toIsoDate(syncedAt);
+  for (const userId of activeMemberIds) {
+    if (userId === ownerId || sessions[userId]) {
+      continue;
+    }
+
+    const member = voiceChannel.members.get(userId);
+    if (!member || member.user.bot) {
+      continue;
+    }
+
+    sessions[userId] = syncedIso;
+    recordMemberSessionStart(guildId, userId, voiceChannel, syncedAt);
+  }
+
+  return sessions;
+}
+
+function recordRegularMemberSessionStartForChannel(voiceChannel, member, startedAt = new Date(), shouldSave = true) {
+  if (!voiceChannel || !member || member.user?.bot) {
+    return false;
+  }
+
+  const savedChannel = botState.activeChannels[voiceChannel.id];
+  if (!savedChannel || savedChannel.guildId !== voiceChannel.guild?.id || member.id === savedChannel.ownerId) {
+    return false;
+  }
+
+  savedChannel.memberSessions = normalizeActiveMemberSessions(savedChannel.memberSessions, savedChannel.ownerId);
+  if (savedChannel.memberSessions[member.id]) {
+    return false;
+  }
+
+  savedChannel.memberSessions[member.id] = toIsoDate(startedAt);
+  savedChannel.updatedAt = toIsoDate(startedAt);
+  recordMemberSessionStart(savedChannel.guildId, member.id, voiceChannel, startedAt);
+
+  if (shouldSave) {
+    saveState();
+  }
+  return true;
+}
+
+function closeRegularMemberSessionForChannel(voiceChannel, userId, endedAt = new Date(), shouldSave = true) {
+  if (!voiceChannel || !isDiscordId(userId)) {
+    return false;
+  }
+
+  const savedChannel = botState.activeChannels[voiceChannel.id];
+  const closed = closeSavedMemberSession(savedChannel, userId, endedAt, voiceChannel.name);
+  if (closed && shouldSave) {
+    saveState();
+  }
+  return closed;
+}
+
 function getActiveHostedMs(guildId, userId, nowMs = Date.now()) {
   return Object.values(botState.activeChannels || {}).reduce((total, savedChannel) => {
     if (savedChannel.guildId !== guildId || savedChannel.ownerId !== userId || !savedChannel.ownerSessionStartedAt) {
@@ -833,6 +1141,42 @@ function getActiveHostedXp(guildId, userId, nowMs = Date.now()) {
   return calculateHostedMinuteXp(getActiveHostedMs(guildId, userId, nowMs));
 }
 
+function getActiveMemberVoiceMs(guildId, userId, nowMs = Date.now()) {
+  return Object.values(botState.activeChannels || {}).reduce((total, savedChannel) => {
+    if (savedChannel.guildId !== guildId || savedChannel.ownerId === userId) {
+      return total;
+    }
+
+    const memberSessions = normalizeActiveMemberSessions(savedChannel.memberSessions, savedChannel.ownerId);
+    const startedAt = memberSessions[userId];
+    if (!startedAt) {
+      return total;
+    }
+
+    const startedMs = Date.parse(startedAt);
+    if (!Number.isFinite(startedMs) || nowMs <= startedMs) {
+      return total;
+    }
+
+    return total + (nowMs - startedMs);
+  }, 0);
+}
+
+function getActiveMemberVoiceRoomCount(guildId, userId) {
+  return Object.values(botState.activeChannels || {}).filter((savedChannel) => {
+    if (savedChannel.guildId !== guildId || savedChannel.ownerId === userId) {
+      return false;
+    }
+
+    const memberSessions = normalizeActiveMemberSessions(savedChannel.memberSessions, savedChannel.ownerId);
+    return Boolean(memberSessions[userId]);
+  }).length;
+}
+
+function getActiveMemberVoiceXp(guildId, userId, nowMs = Date.now()) {
+  return calculateMemberMinuteXp(getActiveMemberVoiceMs(guildId, userId, nowMs));
+}
+
 function getHostStatsSnapshot(guild, userId, nowMs = Date.now()) {
   const guildState = ensureGuildState(guild.id);
   const stats = guildState.hostStats?.[userId] || {};
@@ -851,6 +1195,28 @@ function getHostStatsSnapshot(guild, userId, nowMs = Date.now()) {
     bestStreakDays: Math.max(0, Math.floor(Number(stats.bestStreakDays) || 0)),
     lastHostedAt: stats.lastHostedAt || null,
     lastHostedDate: stats.lastHostedDate || null,
+    lastRoomName: stats.lastRoomName || null,
+  };
+}
+
+function getMemberStatsSnapshot(guild, userId, nowMs = Date.now()) {
+  const guildState = ensureGuildState(guild.id);
+  const stats = guildState.memberStats?.[userId] || {};
+  const voiceSessions = Math.max(0, Math.floor(Number(stats.voiceSessions) || 0));
+  const activeRooms = getActiveMemberVoiceRoomCount(guild.id, userId);
+  const totalVoiceMs = Math.max(0, Math.floor(Number(stats.totalVoiceMs) || 0)) + getActiveMemberVoiceMs(guild.id, userId, nowMs);
+  const xp = Math.max(0, Math.floor(Number(stats.xp) || calculateMemberXp(stats.totalVoiceMs || 0))) + getActiveMemberVoiceXp(guild.id, userId, nowMs);
+  return {
+    userId,
+    voiceSessions,
+    totalVoiceMs,
+    xp,
+    rank: getMemberRank(xp),
+    activeRooms,
+    currentStreakDays: getVisibleCurrentStreakDays(stats, new Date(nowMs), 'lastVoiceDate'),
+    bestStreakDays: Math.max(0, Math.floor(Number(stats.bestStreakDays) || 0)),
+    lastVoiceAt: stats.lastVoiceAt || null,
+    lastVoiceDate: stats.lastVoiceDate || null,
     lastRoomName: stats.lastRoomName || null,
   };
 }
@@ -973,6 +1339,105 @@ async function buildHostProfileCard(guild, userId) {
   }, 'host-profile');
 }
 
+function getTopMemberRows(guild, limit = 10) {
+  const guildState = ensureGuildState(guild.id);
+  const nowMs = Date.now();
+
+  return Object.keys(guildState.memberStats || {})
+    .map((userId) => getMemberStatsSnapshot(guild, userId, nowMs))
+    .filter((row) => row.voiceSessions > 0 || row.totalVoiceMs > 0 || row.activeRooms > 0 || row.xp > 0)
+    .sort((a, b) =>
+      b.xp - a.xp ||
+      b.totalVoiceMs - a.totalVoiceMs ||
+      b.voiceSessions - a.voiceSessions ||
+      a.userId.localeCompare(b.userId)
+    )
+    .slice(0, limit);
+}
+
+async function buildTopMembersCard(guild, limit = 10) {
+  const rows = getTopMemberRows(guild, limit);
+  const members = new Map();
+
+  await Promise.all(rows.map(async (row) => {
+    const member = guild.members.cache.get(row.userId) || await guild.members.fetch(row.userId).catch(() => null);
+    members.set(row.userId, member);
+  }));
+
+  const fields = rows.map((row, index) => {
+    const member = members.get(row.userId);
+    const memberLabel = member?.user?.tag || member?.displayName || row.userId;
+    const details = [
+      formatMemberRankProgress(row.xp),
+      `${formatHostedDuration(row.totalVoiceMs)} regular voice time`,
+      `${row.voiceSessions} room visit(s)`,
+      `${row.currentStreakDays} day current streak - best ${row.bestStreakDays}`,
+    ];
+
+    if (row.activeRooms > 0) {
+      details.push(`${row.activeRooms} active now`);
+    }
+
+    if (row.lastRoomName) {
+      details.push(`Last room: ${row.lastRoomName}`);
+    }
+
+    return {
+      name: `#${index + 1} ${memberLabel}`,
+      value: truncateFieldValue(details.join('\n')),
+      inline: false,
+    };
+  });
+
+  if (fields.length === 0) {
+    fields.push({
+      name: 'No member stats yet',
+      value: 'Stats will appear after members spend time in managed voice rooms.',
+      inline: false,
+    });
+  }
+
+  return createCardAttachment({
+    badge: 'TOP',
+    title: 'Top Voice Room Members',
+    description: fields.length > 1 ? `Showing the top ${fields.length} member(s) by regular voice XP.` : null,
+    fields,
+    footer: 'Regular members earn 1 XP per minute in managed voice rooms. Host XP is tracked separately.',
+  }, 'top-members');
+}
+
+async function buildVoiceProfileCard(guild, userId) {
+  const member = guild.members.cache.get(userId) || await guild.members.fetch(userId).catch(() => null);
+  const row = getMemberStatsSnapshot(guild, userId);
+  const memberLabel = member?.user?.tag || member?.displayName || userId;
+  const fields = [
+    { name: 'Rank', value: formatMemberRankProgress(row.xp), inline: false },
+    { name: 'Voice Time', value: formatHostedDuration(row.totalVoiceMs), inline: true },
+    { name: 'Room Visits', value: `${row.voiceSessions}`, inline: true },
+    { name: 'Streak', value: `${row.currentStreakDays} day current\nBest: ${row.bestStreakDays} day`, inline: true },
+  ];
+
+  if (row.activeRooms > 0) {
+    fields.push({ name: 'Active Now', value: `${row.activeRooms} room(s)`, inline: true });
+  }
+
+  if (row.lastRoomName) {
+    fields.push({ name: 'Last Room', value: row.lastRoomName, inline: false });
+  }
+
+  if (row.voiceSessions === 0 && row.xp === 0) {
+    fields.push({ name: 'No XP yet', value: 'Join a managed voice room as a regular member to start earning XP.', inline: false });
+  }
+
+  return createCardAttachment({
+    badge: 'XP',
+    title: 'Voice Member Profile',
+    subtitle: memberLabel,
+    fields,
+    footer: 'Regular members earn 1 XP per minute. Hosting XP stays on /hostprofile.',
+  }, 'voice-profile');
+}
+
 function migrateLegacyConfig(config) {
   if (!config || !isDiscordId(config.guildId) || !Array.isArray(config.categories)) {
     return;
@@ -1072,6 +1537,11 @@ function closeSavedHostSession(savedChannel, endedAt = new Date()) {
   );
 }
 
+function closeSavedActiveChannelSessions(savedChannel, endedAt = new Date()) {
+  closeSavedHostSession(savedChannel, endedAt);
+  closeSavedMemberSessions(savedChannel, endedAt);
+}
+
 function rememberActiveChannel(voiceChannel, ownerId, category = null, permissionSnapshot = null) {
   const existingState = botState.activeChannels[voiceChannel.id] || {};
   const poolEntry = poolChannelArchive.get(voiceChannel.id);
@@ -1083,6 +1553,7 @@ function rememberActiveChannel(voiceChannel, ownerId, category = null, permissio
   const now = new Date();
   const nowIso = now.toISOString();
   const ownerChanged = existingState.ownerId !== ownerId;
+  const memberSessions = syncMemberSessionsForVoiceChannel(voiceChannel, guildId, ownerId, existingState.memberSessions, now);
 
   if (existingState.ownerId && ownerChanged) {
     closeSavedHostSession(existingState, now);
@@ -1107,6 +1578,7 @@ function rememberActiveChannel(voiceChannel, ownerId, category = null, permissio
     activeCategoryId: category?.activeCategoryId || existingState.activeCategoryId || voiceChannel.parentId || null,
     archiveCategoryId,
     permissionOverwrites: savedPermissionSnapshot,
+    memberSessions,
     moderatorLocked: Boolean(existingState.moderatorLocked),
     moderatorLockedBy: existingState.moderatorLockedBy || null,
     moderatorLockedAt: existingState.moderatorLockedAt || null,
@@ -1122,7 +1594,7 @@ function rememberActiveChannel(voiceChannel, ownerId, category = null, permissio
 }
 
 function forgetActiveChannel(voiceChannelId) {
-  closeSavedHostSession(botState.activeChannels[voiceChannelId]);
+  closeSavedActiveChannelSessions(botState.activeChannels[voiceChannelId]);
   voiceChannelOwners.delete(voiceChannelId);
   voiceChannelPermissionSnapshots.delete(voiceChannelId);
   delete botState.activeChannels[voiceChannelId];
@@ -1207,7 +1679,7 @@ async function restoreActiveChannels(guild) {
     const voiceChannel = guild.channels.cache.get(channelId);
     if (!voiceChannel) {
       if (savedChannel.guildId === guild.id) {
-        closeSavedHostSession(savedChannel);
+        closeSavedActiveChannelSessions(savedChannel);
         voiceChannelOwners.delete(channelId);
         voiceChannelPermissionSnapshots.delete(channelId);
         delete botState.activeChannels[channelId];
@@ -1218,7 +1690,7 @@ async function restoreActiveChannels(guild) {
 
     const category = findCategoryForSavedChannel(savedChannel, guild.id);
     if (!category || voiceChannel.type !== ChannelType.GuildVoice) {
-      closeSavedHostSession(savedChannel);
+      closeSavedActiveChannelSessions(savedChannel);
       voiceChannelOwners.delete(channelId);
       voiceChannelPermissionSnapshots.delete(channelId);
       delete botState.activeChannels[channelId];
@@ -1233,7 +1705,7 @@ async function restoreActiveChannels(guild) {
     }
 
     if (voiceChannel.parentId === category.archiveCategoryId) {
-      closeSavedHostSession(savedChannel);
+      closeSavedActiveChannelSessions(savedChannel);
       voiceChannelOwners.delete(channelId);
       voiceChannelPermissionSnapshots.delete(channelId);
       delete botState.activeChannels[channelId];
@@ -1243,7 +1715,7 @@ async function restoreActiveChannels(guild) {
 
     if (voiceChannel.parentId !== category.activeCategoryId) {
       console.warn(`Saved channel ${voiceChannel.name} is no longer in an active category. Removing it from state.`);
-      closeSavedHostSession(savedChannel);
+      closeSavedActiveChannelSessions(savedChannel);
       voiceChannelOwners.delete(channelId);
       voiceChannelPermissionSnapshots.delete(channelId);
       delete botState.activeChannels[channelId];
@@ -1263,6 +1735,9 @@ async function restoreActiveChannels(guild) {
     const now = new Date();
     const ownerChanged = savedChannel.ownerId !== owner.id;
     const missingSessionStart = !savedChannel.ownerSessionStartedAt;
+    const previousMemberSessions = normalizeActiveMemberSessions(savedChannel.memberSessions, owner.id);
+    const memberSessions = syncMemberSessionsForVoiceChannel(voiceChannel, guild.id, owner.id, previousMemberSessions, now);
+    const memberSessionsChanged = JSON.stringify(previousMemberSessions) !== JSON.stringify(memberSessions);
     voiceChannelOwners.set(channelId, owner.id);
 
     if (savedChannel.ownerId && ownerChanged) {
@@ -1273,7 +1748,7 @@ async function restoreActiveChannels(guild) {
       recordHostSessionStart(guild.id, owner.id, voiceChannel, now);
     }
 
-    if (!savedOwner || savedChannel.guildId !== guild.id || ownerChanged || missingSessionStart) {
+    if (!savedOwner || savedChannel.guildId !== guild.id || ownerChanged || missingSessionStart || memberSessionsChanged) {
       botState.activeChannels[channelId] = {
         ...savedChannel,
         guildId: guild.id,
@@ -1284,6 +1759,7 @@ async function restoreActiveChannels(guild) {
         requestChannelId: category.requestChannelId,
         activeCategoryId: category.activeCategoryId,
         archiveCategoryId: category.archiveCategoryId,
+        memberSessions,
         updatedAt: now.toISOString(),
       };
       changedState = true;
@@ -2794,6 +3270,14 @@ function buildHelpCard(interaction, page = 'general') {
       {
         name: '/hostprofile member:@user',
         value: 'Shows host XP, rank, hosted time, and room streaks.',
+      },
+      {
+        name: '/vcprofile member:@user',
+        value: 'Shows regular voice member XP, rank, voice time, and streaks.',
+      },
+      {
+        name: '/topmembers limit:10',
+        value: 'Shows the regular voice member XP leaderboard.',
       }
     );
 
@@ -2824,7 +3308,7 @@ function buildHelpCard(interaction, page = 'general') {
     if (canRunTopHosts) {
       fields.push({
         name: '/tophosts limit:10',
-        value: 'Shows the top managed voice room hosts by hosted room count and total hosted time.',
+        value: 'Shows the top managed voice room hosts by host XP, hosted time, and streaks.',
       });
     }
 
@@ -3021,6 +3505,36 @@ async function handleHostProfileCommand(interaction) {
   await interaction.editReply({
     attachments: [],
     files: [await buildHostProfileCard(interaction.guild, requestedUser.id)],
+  });
+}
+
+async function handleTopMembersCommand(interaction) {
+  if (!interaction.guild) {
+    await interaction.reply({ files: [buildStatusCard('Top Members', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
+    return;
+  }
+
+  const requestedLimit = interaction.options.getInteger('limit') || 10;
+  const limit = Math.min(Math.max(requestedLimit, 1), 25);
+  await interaction.deferReply();
+
+  await interaction.editReply({
+    attachments: [],
+    files: [await buildTopMembersCard(interaction.guild, limit)],
+  });
+}
+
+async function handleVoiceProfileCommand(interaction) {
+  if (!interaction.guild) {
+    await interaction.reply({ files: [buildStatusCard('Voice Member Profile', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
+    return;
+  }
+
+  const requestedUser = interaction.options.getUser('member') || interaction.user;
+  await interaction.deferReply();
+  await interaction.editReply({
+    attachments: [],
+    files: [await buildVoiceProfileCard(interaction.guild, requestedUser.id)],
   });
 }
 
@@ -4288,16 +4802,17 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
       console.warn('Failed to process voice activity log:', error);
     });
 
-    if (newState.channelId && newState.channelId !== oldState.channelId) {
-      const category = requestChannelById.get(newState.channelId);
-      if (category) {
-        await handleRequestChannelJoin(newState, category);
-      }
+    if (newState.channelId === oldState.channelId) {
+      return;
     }
 
-    if (oldState.channelId && oldState.channelId !== newState.channelId) {
+    const now = new Date();
+
+    if (oldState.channelId) {
       const oldChannel = oldState.channel;
       if (oldChannel?.type === ChannelType.GuildVoice) {
+        closeRegularMemberSessionForChannel(oldChannel, oldState.member?.id, now);
+
         const currentOwnerId = voiceChannelOwners.get(oldChannel.id);
         if (currentOwnerId === oldState.member?.id) {
           const newOwner = await assignVoiceChannelOwner(oldChannel);
@@ -4308,6 +4823,18 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
         }
       }
       await handleEmptyPoolChannel(oldChannel);
+    }
+
+    if (newState.channelId) {
+      const category = requestChannelById.get(newState.channelId);
+      if (category) {
+        await handleRequestChannelJoin(newState, category);
+      }
+
+      const newChannel = newState.channel;
+      if (newChannel?.type === ChannelType.GuildVoice) {
+        recordRegularMemberSessionStartForChannel(newChannel, newState.member, now);
+      }
     }
   } catch (error) {
     console.error('Error handling voice state update:', error);
@@ -4369,6 +4896,16 @@ client.on('interactionCreate', async (interaction) => {
 
     if (interaction.commandName === 'hostprofile') {
       await handleHostProfileCommand(interaction);
+      return;
+    }
+
+    if (interaction.commandName === 'topmembers') {
+      await handleTopMembersCommand(interaction);
+      return;
+    }
+
+    if (interaction.commandName === 'vcprofile') {
+      await handleVoiceProfileCommand(interaction);
       return;
     }
 
@@ -4504,6 +5041,8 @@ module.exports = {
   handleEmptyPoolChannel,
   assignVoiceChannelOwner,
   rememberActiveChannel,
+  recordRegularMemberSessionStartForChannel,
+  closeRegularMemberSessionForChannel,
   sendCapacitySelector,
   notifyNewOwner,
   moveChannelToCategory,

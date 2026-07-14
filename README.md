@@ -9,6 +9,7 @@ The bot helps keep voice channels organized by assigning available rooms when us
 - Temporary voice room management
 - Admin setup through Discord commands
 - Room owner controls
+- Voice XP profiles and leaderboards
 - Optional moderation controls
 - Persistent local configuration between restarts
 
