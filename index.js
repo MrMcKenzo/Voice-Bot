@@ -3204,15 +3204,23 @@ function isCurrentRoomOwner(member) {
   return voiceChannelOwners.get(memberVoiceChannel.id) === member.id;
 }
 
-const helpPageOrder = ['general', 'moderation', 'setup'];
+const helpPageOrder = ['general', 'xp', 'logging', 'moderator', 'setup'];
 const helpPages = {
   general: {
     title: 'General',
-    description: 'General commands and room-owner tools.',
+    description: 'Everyday room commands and owner tools.',
   },
-  moderation: {
-    title: 'Moderation',
-    description: 'Moderator tools for logs and managed room overrides.',
+  xp: {
+    title: 'XP',
+    description: 'XP profiles and leaderboards.',
+  },
+  logging: {
+    title: 'Logging',
+    description: 'Voice and moderator audit logging.',
+  },
+  moderator: {
+    title: 'Moderator Room Controls',
+    description: 'Moderator controls for managed rooms.',
   },
   setup: {
     title: 'Setup',
@@ -3268,21 +3276,6 @@ function buildHelpCard(interaction, page = 'general') {
         value: 'Shows active voice rooms, owners, user counts, and available archived rooms.',
       },
       {
-        name: '/hostprofile member:@user',
-        value: 'Shows host XP, rank, hosted time, and room streaks.',
-      },
-      {
-        name: '/vcprofile member:@user',
-        value: 'Shows regular voice member XP, rank, voice time, and streaks.',
-      },
-      {
-        name: '/topmembers limit:10',
-        value: 'Shows the regular voice member XP leaderboard.',
-      }
-    );
-
-    fields.push(
-      {
         name: '/userlimit',
         value: 'Posts the user-limit selector for your active room. Requires you to own a bot-managed active room.',
       },
@@ -3297,21 +3290,44 @@ function buildHelpCard(interaction, page = 'general') {
     );
   }
 
-  if (activePage === 'moderation') {
-    if (canRunLogs) {
-      fields.push({
-        name: '/logs channel:#logs enabled:true',
-        value: 'Sets, checks, enables, or disables voice activity and moderator audit logging.',
-      });
-    }
+  if (activePage === 'xp') {
+    fields.push(
+      {
+        name: '/hostprofile member:@user',
+        value: 'Shows host XP, rank, hosted time, and room streaks.',
+      },
+      {
+        name: '/vcprofile member:@user',
+        value: 'Shows regular voice member XP, rank, voice time, and streaks.',
+      },
+      {
+        name: '/topmembers limit:10',
+        value: 'Shows the regular voice member XP leaderboard.',
+      }
+    );
 
     if (canRunTopHosts) {
       fields.push({
         name: '/tophosts limit:10',
         value: 'Shows the top managed voice room hosts by host XP, hosted time, and streaks.',
       });
+    } else {
+      notes.push('Top hosts requires Manage Server, Manage Channels, the configured access role, or bot owner access.');
     }
+  }
 
+  if (activePage === 'logging') {
+    if (canRunLogs) {
+      fields.push({
+        name: '/logs channel:#logs enabled:true',
+        value: 'Sets, checks, enables, or disables voice activity and moderator audit logging.',
+      });
+    } else {
+      notes.push('Logging requires Manage Server, Manage Channels, Moderate Members, the configured access role, or bot owner access.');
+    }
+  }
+
+  if (activePage === 'moderator') {
     if (canRunModeratorOverride) {
       fields.push(
         {
@@ -3343,18 +3359,8 @@ function buildHelpCard(interaction, page = 'general') {
           value: 'Returns an empty managed room to the archive category.',
         }
       );
-    }
-
-    if (!canRunLogs) {
-      notes.push('Log setup requires Manage Server, Manage Channels, Moderate Members, the configured access role, or bot owner access.');
-    }
-
-    if (!canRunTopHosts) {
-      notes.push('Top hosts requires Manage Server, Manage Channels, the configured access role, or bot owner access.');
-    }
-
-    if (!canRunModeratorOverride) {
-      notes.push('Moderator override requires Manage Server, Manage Channels, Moderate Members, the configured access role, or bot owner access.');
+    } else {
+      notes.push('Moderator controls require Manage Server, Manage Channels, Moderate Members, the configured access role, or bot owner access.');
     }
   }
 
