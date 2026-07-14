@@ -34,6 +34,17 @@ const botPermissionBits =
   PermissionFlagsBits.SendMessages |
   PermissionFlagsBits.AttachFiles |
   PermissionFlagsBits.Connect;
+const hostRoomStartXp = 25;
+const hostXpPerHostedMinute = 1;
+const hostRanks = [
+  { name: 'Rookie Host', xp: 0 },
+  { name: 'Room Starter', xp: 100 },
+  { name: 'Voice Regular', xp: 250 },
+  { name: 'Party Captain', xp: 500 },
+  { name: 'Lounge Legend', xp: 1000 },
+  { name: 'VC Royalty', xp: 2000 },
+  { name: 'Eternal Host', xp: 5000 },
+];
 
 if (!token) {
   console.error('Missing DISCORD_TOKEN in .env.');
@@ -121,6 +132,20 @@ const guildCommands = [
         type: ApplicationCommandOptionType.Integer,
         minValue: 1,
         maxValue: 25,
+        required: false,
+      },
+    ],
+  },
+  {
+    name: 'hostprofile',
+    description: 'Show voice room host XP and streaks',
+    type: ApplicationCommandType.ChatInput,
+    dm_permission: false,
+    options: [
+      {
+        name: 'member',
+        description: 'Member to view, or leave blank for yourself',
+        type: ApplicationCommandOptionType.User,
         required: false,
       },
     ],
@@ -464,6 +489,26 @@ function ensureGuildState(guildId) {
     const totalHostedMs = Number(stats.totalHostedMs);
     stats.roomsHosted = Number.isFinite(roomsHosted) && roomsHosted > 0 ? Math.floor(roomsHosted) : 0;
     stats.totalHostedMs = Number.isFinite(totalHostedMs) && totalHostedMs > 0 ? Math.floor(totalHostedMs) : 0;
+
+    const xp = Number(stats.xp);
+    stats.xp = Number.isFinite(xp) && xp > 0
+      ? Math.floor(xp)
+      : calculateHostXp(stats.roomsHosted, stats.totalHostedMs);
+
+    const currentStreakDays = Number(stats.currentStreakDays);
+    const bestStreakDays = Number(stats.bestStreakDays);
+    stats.currentStreakDays = Number.isFinite(currentStreakDays) && currentStreakDays > 0 ? Math.floor(currentStreakDays) : 0;
+    stats.bestStreakDays = Number.isFinite(bestStreakDays) && bestStreakDays > 0
+      ? Math.floor(bestStreakDays)
+      : stats.currentStreakDays;
+    stats.lastHostedDate = isDateKey(stats.lastHostedDate)
+      ? stats.lastHostedDate
+      : dateKeyFromValue(stats.lastHostedAt);
+    if (stats.lastHostedDate && stats.currentStreakDays === 0) {
+      stats.currentStreakDays = 1;
+      stats.bestStreakDays = Math.max(stats.bestStreakDays, 1);
+    }
+
     stats.lastHostedAt = typeof stats.lastHostedAt === 'string' ? stats.lastHostedAt : null;
     stats.lastRoomName = typeof stats.lastRoomName === 'string' ? stats.lastRoomName : null;
     stats.updatedAt = typeof stats.updatedAt === 'string' ? stats.updatedAt : null;
@@ -614,6 +659,95 @@ function toIsoDate(value = new Date()) {
   return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
 }
 
+function dateKeyFromValue(value) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString().slice(0, 10);
+}
+
+function isDateKey(value) {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00.000Z`));
+}
+
+function dayNumberFromDateKey(dateKey) {
+  if (!isDateKey(dateKey)) {
+    return null;
+  }
+
+  return Math.floor(Date.parse(`${dateKey}T00:00:00.000Z`) / 86400000);
+}
+
+function calculateHostedMinuteXp(durationMs) {
+  return Math.max(0, Math.floor(durationMs / 60000) * hostXpPerHostedMinute);
+}
+
+function calculateHostXp(roomsHosted, totalHostedMs) {
+  return (Math.max(0, Math.floor(Number(roomsHosted) || 0)) * hostRoomStartXp) + calculateHostedMinuteXp(Number(totalHostedMs) || 0);
+}
+
+function getHostRank(xp) {
+  const normalizedXp = Math.max(0, Math.floor(Number(xp) || 0));
+  let currentRank = hostRanks[0];
+  let nextRank = null;
+
+  for (const rank of hostRanks) {
+    if (normalizedXp >= rank.xp) {
+      currentRank = rank;
+      continue;
+    }
+
+    nextRank = rank;
+    break;
+  }
+
+  return { currentRank, nextRank };
+}
+
+function formatHostRankProgress(xp) {
+  const normalizedXp = Math.max(0, Math.floor(Number(xp) || 0));
+  const { currentRank, nextRank } = getHostRank(normalizedXp);
+  if (!nextRank) {
+    return `${currentRank.name} - ${normalizedXp} XP`;
+  }
+
+  return `${currentRank.name} - ${normalizedXp} XP (${nextRank.xp - normalizedXp} to ${nextRank.name})`;
+}
+
+function updateHostStreak(stats, hostedAt = new Date()) {
+  if (!stats) {
+    return;
+  }
+
+  const hostedDateKey = dateKeyFromValue(hostedAt);
+  if (!hostedDateKey || stats.lastHostedDate === hostedDateKey) {
+    return;
+  }
+
+  const previousDay = dayNumberFromDateKey(stats.lastHostedDate);
+  const currentDay = dayNumberFromDateKey(hostedDateKey);
+  const continuedStreak = previousDay !== null && currentDay === previousDay + 1;
+  stats.currentStreakDays = continuedStreak ? Math.max(0, Number(stats.currentStreakDays) || 0) + 1 : 1;
+  stats.bestStreakDays = Math.max(Number(stats.bestStreakDays) || 0, stats.currentStreakDays);
+  stats.lastHostedDate = hostedDateKey;
+}
+
+function getVisibleCurrentStreakDays(stats, now = new Date()) {
+  if (!stats?.lastHostedDate) {
+    return 0;
+  }
+
+  const lastDay = dayNumberFromDateKey(stats.lastHostedDate);
+  const currentDay = dayNumberFromDateKey(dateKeyFromValue(now));
+  if (lastDay === null || currentDay === null || currentDay - lastDay > 1) {
+    return 0;
+  }
+
+  return Math.max(0, Math.floor(Number(stats.currentStreakDays) || 0));
+}
+
 function getHostStatsEntry(guildId, userId) {
   if (!isDiscordId(guildId) || !isDiscordId(userId)) {
     return null;
@@ -624,7 +758,11 @@ function getHostStatsEntry(guildId, userId) {
     guildState.hostStats[userId] = {
       roomsHosted: 0,
       totalHostedMs: 0,
+      xp: 0,
+      currentStreakDays: 0,
+      bestStreakDays: 0,
       lastHostedAt: null,
+      lastHostedDate: null,
       lastRoomName: null,
       updatedAt: null,
     };
@@ -641,6 +779,8 @@ function recordHostSessionStart(guildId, userId, voiceChannel, startedAt = new D
 
   const startedIso = toIsoDate(startedAt);
   stats.roomsHosted += 1;
+  stats.xp = Math.max(0, Math.floor(Number(stats.xp) || 0)) + hostRoomStartXp;
+  updateHostStreak(stats, startedAt);
   stats.lastHostedAt = startedIso;
   stats.lastRoomName = voiceChannel?.name || stats.lastRoomName || null;
   stats.updatedAt = startedIso;
@@ -656,7 +796,10 @@ function closeHostSession(guildId, userId, startedAt, endedAt = new Date(), room
   const endedDate = endedAt instanceof Date ? endedAt : new Date(endedAt);
   const endedMs = endedDate.getTime();
   if (Number.isFinite(startedMs) && Number.isFinite(endedMs) && endedMs > startedMs) {
-    stats.totalHostedMs += endedMs - startedMs;
+    const durationMs = endedMs - startedMs;
+    stats.totalHostedMs += durationMs;
+    stats.xp = Math.max(0, Math.floor(Number(stats.xp) || 0)) + calculateHostedMinuteXp(durationMs);
+    updateHostStreak(stats, endedDate);
   }
 
   const endedIso = toIsoDate(endedDate);
@@ -686,6 +829,32 @@ function getActiveHostedRoomCount(guildId, userId) {
   ).length;
 }
 
+function getActiveHostedXp(guildId, userId, nowMs = Date.now()) {
+  return calculateHostedMinuteXp(getActiveHostedMs(guildId, userId, nowMs));
+}
+
+function getHostStatsSnapshot(guild, userId, nowMs = Date.now()) {
+  const guildState = ensureGuildState(guild.id);
+  const stats = guildState.hostStats?.[userId] || {};
+  const roomsHosted = Math.max(0, Math.floor(Number(stats.roomsHosted) || 0));
+  const activeRooms = getActiveHostedRoomCount(guild.id, userId);
+  const totalHostedMs = Math.max(0, Math.floor(Number(stats.totalHostedMs) || 0)) + getActiveHostedMs(guild.id, userId, nowMs);
+  const xp = Math.max(0, Math.floor(Number(stats.xp) || calculateHostXp(roomsHosted, stats.totalHostedMs || 0))) + getActiveHostedXp(guild.id, userId, nowMs);
+  return {
+    userId,
+    roomsHosted,
+    totalHostedMs,
+    xp,
+    rank: getHostRank(xp),
+    activeRooms,
+    currentStreakDays: getVisibleCurrentStreakDays(stats, new Date(nowMs)),
+    bestStreakDays: Math.max(0, Math.floor(Number(stats.bestStreakDays) || 0)),
+    lastHostedAt: stats.lastHostedAt || null,
+    lastHostedDate: stats.lastHostedDate || null,
+    lastRoomName: stats.lastRoomName || null,
+  };
+}
+
 function formatHostedDuration(totalMs) {
   const totalMinutes = Math.max(0, Math.floor(totalMs / 60000));
   const days = Math.floor(totalMinutes / 1440);
@@ -709,22 +878,11 @@ function getTopHostRows(guild, limit = 10) {
   const guildState = ensureGuildState(guild.id);
   const nowMs = Date.now();
 
-  return Object.entries(guildState.hostStats || {})
-    .map(([userId, stats]) => {
-      const roomsHosted = Number(stats.roomsHosted) || 0;
-      const activeRooms = getActiveHostedRoomCount(guild.id, userId);
-      const totalHostedMs = (Number(stats.totalHostedMs) || 0) + getActiveHostedMs(guild.id, userId, nowMs);
-      return {
-        userId,
-        roomsHosted,
-        totalHostedMs,
-        activeRooms,
-        lastHostedAt: stats.lastHostedAt || null,
-        lastRoomName: stats.lastRoomName || null,
-      };
-    })
-    .filter((row) => row.roomsHosted > 0 || row.totalHostedMs > 0 || row.activeRooms > 0)
+  return Object.keys(guildState.hostStats || {})
+    .map((userId) => getHostStatsSnapshot(guild, userId, nowMs))
+    .filter((row) => row.roomsHosted > 0 || row.totalHostedMs > 0 || row.activeRooms > 0 || row.xp > 0)
     .sort((a, b) =>
+      b.xp - a.xp ||
       b.roomsHosted - a.roomsHosted ||
       b.totalHostedMs - a.totalHostedMs ||
       a.userId.localeCompare(b.userId)
@@ -745,8 +903,10 @@ async function buildTopHostsCard(guild, limit = 10) {
     const member = members.get(row.userId);
     const hostLabel = member?.user?.tag || member?.displayName || row.userId;
     const details = [
+      formatHostRankProgress(row.xp),
       `${row.roomsHosted} hosted room(s)`,
       `${formatHostedDuration(row.totalHostedMs)} total hosted time`,
+      `${row.currentStreakDays} day current streak - best ${row.bestStreakDays}`,
     ];
 
     if (row.activeRooms > 0) {
@@ -775,10 +935,42 @@ async function buildTopHostsCard(guild, limit = 10) {
   return createCardAttachment({
     badge: 'TOP',
     title: 'Top Voice Room Hosts',
-    description: fields.length > 1 ? `Showing the top ${fields.length} host(s).` : null,
+    description: fields.length > 1 ? `Showing the top ${fields.length} host(s) by XP.` : null,
     fields,
     footer: 'Server managers, the access role, and the bot owner can view this leaderboard. Active sessions are included in total time.',
   }, 'top-hosts');
+}
+
+async function buildHostProfileCard(guild, userId) {
+  const member = guild.members.cache.get(userId) || await guild.members.fetch(userId).catch(() => null);
+  const row = getHostStatsSnapshot(guild, userId);
+  const hostLabel = member?.user?.tag || member?.displayName || userId;
+  const fields = [
+    { name: 'Rank', value: formatHostRankProgress(row.xp), inline: false },
+    { name: 'Rooms Hosted', value: `${row.roomsHosted}`, inline: true },
+    { name: 'Hosted Time', value: formatHostedDuration(row.totalHostedMs), inline: true },
+    { name: 'Streak', value: `${row.currentStreakDays} day current\nBest: ${row.bestStreakDays} day`, inline: true },
+  ];
+
+  if (row.activeRooms > 0) {
+    fields.push({ name: 'Active Now', value: `${row.activeRooms} room(s)`, inline: true });
+  }
+
+  if (row.lastRoomName) {
+    fields.push({ name: 'Last Room', value: row.lastRoomName, inline: false });
+  }
+
+  if (row.roomsHosted === 0 && row.xp === 0) {
+    fields.push({ name: 'No XP yet', value: 'Host a managed voice room to start earning XP and streaks.', inline: false });
+  }
+
+  return createCardAttachment({
+    badge: 'XP',
+    title: 'Host Profile',
+    subtitle: hostLabel,
+    fields,
+    footer: 'Earn 25 XP for opening a room, plus 1 XP per hosted minute.',
+  }, 'host-profile');
 }
 
 function migrateLegacyConfig(config) {
@@ -2598,6 +2790,10 @@ function buildHelpCard(interaction, page = 'general') {
       {
         name: '/rooms',
         value: 'Shows active voice rooms, owners, user counts, and available archived rooms.',
+      },
+      {
+        name: '/hostprofile member:@user',
+        value: 'Shows host XP, rank, hosted time, and room streaks.',
       }
     );
 
@@ -2811,6 +3007,20 @@ async function handleTopHostsCommand(interaction) {
   await interaction.editReply({
     attachments: [],
     files: [await buildTopHostsCard(interaction.guild, limit)],
+  });
+}
+
+async function handleHostProfileCommand(interaction) {
+  if (!interaction.guild) {
+    await interaction.reply({ files: [buildStatusCard('Host Profile', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
+    return;
+  }
+
+  const requestedUser = interaction.options.getUser('member') || interaction.user;
+  await interaction.deferReply();
+  await interaction.editReply({
+    attachments: [],
+    files: [await buildHostProfileCard(interaction.guild, requestedUser.id)],
   });
 }
 
@@ -4154,6 +4364,11 @@ client.on('interactionCreate', async (interaction) => {
 
     if (interaction.commandName === 'tophosts') {
       await handleTopHostsCommand(interaction);
+      return;
+    }
+
+    if (interaction.commandName === 'hostprofile') {
+      await handleHostProfileCommand(interaction);
       return;
     }
 
