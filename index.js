@@ -809,33 +809,53 @@ function getMemberRank(xp) {
   return getRankForXp(memberRanks, xp);
 }
 
-function buildXpProgressBar(currentXp, levelStartXp, nextLevelXp, width = 12) {
-  const neededXp = Math.max(1, nextLevelXp - levelStartXp);
-  const earnedXp = Math.min(Math.max(0, currentXp - levelStartXp), neededXp);
-  let filledBlocks = Math.floor((earnedXp / neededXp) * width);
+function getRankProgress(ranks, xp) {
+  const normalizedXp = Math.max(0, Math.floor(Number(xp) || 0));
+  const { currentRank, nextRank, currentLevel, maxLevel } = getRankForXp(ranks, normalizedXp);
+  const levelStartXp = Math.max(0, currentRank.xp || 0);
 
-  if (earnedXp > 0 && filledBlocks === 0) {
-    filledBlocks = 1;
+  if (!nextRank) {
+    return {
+      currentRank,
+      nextRank,
+      currentLevel,
+      maxLevel,
+      xp: normalizedXp,
+      levelStartXp,
+      nextLevelXp: levelStartXp,
+      earnedXp: 1,
+      neededXp: 1,
+      percent: 1,
+    };
   }
 
-  filledBlocks = Math.min(width, filledBlocks);
-  return `[${'#'.repeat(filledBlocks)}${'-'.repeat(width - filledBlocks)}]`;
+  const nextLevelXp = Math.max(levelStartXp + 1, nextRank.xp);
+  const neededXp = Math.max(1, nextLevelXp - levelStartXp);
+  const earnedXp = Math.min(Math.max(0, normalizedXp - levelStartXp), neededXp);
+
+  return {
+    currentRank,
+    nextRank,
+    currentLevel,
+    maxLevel,
+    xp: normalizedXp,
+    levelStartXp,
+    nextLevelXp,
+    earnedXp,
+    neededXp,
+    percent: earnedXp / neededXp,
+  };
 }
 
 function formatRankProgress(ranks, xp) {
-  const normalizedXp = Math.max(0, Math.floor(Number(xp) || 0));
-  const { currentRank, nextRank, currentLevel, maxLevel } = getRankForXp(ranks, normalizedXp);
-  const title = `Level ${currentLevel}/${maxLevel}: ${currentRank.name} - ${normalizedXp} XP`;
+  const progress = getRankProgress(ranks, xp);
+  const title = `Level ${progress.currentLevel}/${progress.maxLevel}: ${progress.currentRank.name} - ${progress.xp} XP`;
 
-  if (!nextRank) {
-    return `${title}\n[############] Max level`;
+  if (!progress.nextRank) {
+    return `${title}\nMax level`;
   }
 
-  const levelStartXp = Math.max(0, currentRank.xp || 0);
-  const neededXp = Math.max(1, nextRank.xp - levelStartXp);
-  const earnedXp = Math.min(Math.max(0, normalizedXp - levelStartXp), neededXp);
-  const progressBar = buildXpProgressBar(normalizedXp, levelStartXp, nextRank.xp);
-  return `${title}\n${progressBar} ${earnedXp}/${neededXp} XP to ${nextRank.name}`;
+  return `${title}\n${progress.earnedXp}/${progress.neededXp} XP to ${progress.nextRank.name}`;
 }
 
 function formatHostRankProgress(xp) {
@@ -844,6 +864,14 @@ function formatHostRankProgress(xp) {
 
 function formatMemberRankProgress(xp) {
   return formatRankProgress(memberRanks, xp);
+}
+
+function getHostRankProgress(xp) {
+  return getRankProgress(hostRanks, xp);
+}
+
+function getMemberRankProgress(xp) {
+  return getRankProgress(memberRanks, xp);
 }
 
 function updateDailyStreak(stats, dateField, activityAt = new Date()) {
@@ -1295,6 +1323,7 @@ async function buildTopHostsCard(guild, limit = 10) {
   const fields = rows.map((row, index) => {
     const member = members.get(row.userId);
     const hostLabel = member?.user?.tag || member?.displayName || row.userId;
+    const progress = getHostRankProgress(row.xp);
     const details = [
       formatHostRankProgress(row.xp),
       `${row.roomsHosted} hosted room(s)`,
@@ -1314,6 +1343,7 @@ async function buildTopHostsCard(guild, limit = 10) {
       name: `#${index + 1} ${hostLabel}`,
       value: truncateFieldValue(details.join('\n')),
       inline: false,
+      progress,
     };
   });
 
@@ -1339,7 +1369,7 @@ async function buildHostProfileCard(guild, userId) {
   const row = getHostStatsSnapshot(guild, userId);
   const hostLabel = member?.user?.tag || member?.displayName || userId;
   const fields = [
-    { name: 'Rank', value: formatHostRankProgress(row.xp), inline: false },
+    { name: 'Rank', value: formatHostRankProgress(row.xp), inline: false, progress: getHostRankProgress(row.xp) },
     { name: 'Rooms Hosted', value: `${row.roomsHosted}`, inline: true },
     { name: 'Hosted Time', value: formatHostedDuration(row.totalHostedMs), inline: true },
     { name: 'Streak', value: `${row.currentStreakDays} day current\nBest: ${row.bestStreakDays} day`, inline: true },
@@ -1394,6 +1424,7 @@ async function buildTopMembersCard(guild, limit = 10) {
   const fields = rows.map((row, index) => {
     const member = members.get(row.userId);
     const memberLabel = member?.user?.tag || member?.displayName || row.userId;
+    const progress = getMemberRankProgress(row.xp);
     const details = [
       formatMemberRankProgress(row.xp),
       `${formatHostedDuration(row.totalVoiceMs)} regular voice time`,
@@ -1413,6 +1444,7 @@ async function buildTopMembersCard(guild, limit = 10) {
       name: `#${index + 1} ${memberLabel}`,
       value: truncateFieldValue(details.join('\n')),
       inline: false,
+      progress,
     };
   });
 
@@ -1438,7 +1470,7 @@ async function buildVoiceProfileCard(guild, userId) {
   const row = getMemberStatsSnapshot(guild, userId);
   const memberLabel = member?.user?.tag || member?.displayName || userId;
   const fields = [
-    { name: 'Rank', value: formatMemberRankProgress(row.xp), inline: false },
+    { name: 'Rank', value: formatMemberRankProgress(row.xp), inline: false, progress: getMemberRankProgress(row.xp) },
     { name: 'Voice Time', value: formatHostedDuration(row.totalVoiceMs), inline: true },
     { name: 'Room Visits', value: `${row.voiceSessions}`, inline: true },
     { name: 'Streak', value: `${row.currentStreakDays} day current\nBest: ${row.bestStreakDays} day`, inline: true },
@@ -2633,6 +2665,51 @@ function drawImageRoundedAccentPanel(pixels, width, height, x, y, rectWidth, rec
   }
 }
 
+function normalizeImageColor(color, fallback = cardTheme.accent) {
+  if (!Array.isArray(color)) {
+    return fallback;
+  }
+
+  return [
+    Number.isFinite(Number(color[0])) ? Math.max(0, Math.min(255, Math.floor(Number(color[0])))) : fallback[0],
+    Number.isFinite(Number(color[1])) ? Math.max(0, Math.min(255, Math.floor(Number(color[1])))) : fallback[1],
+    Number.isFinite(Number(color[2])) ? Math.max(0, Math.min(255, Math.floor(Number(color[2])))) : fallback[2],
+    Number.isFinite(Number(color[3])) ? Math.max(0, Math.min(255, Math.floor(Number(color[3])))) : 255,
+  ];
+}
+
+function normalizeImageProgress(progress) {
+  if (!progress || typeof progress !== 'object') {
+    return null;
+  }
+
+  const percent = Number(progress.percent);
+  if (!Number.isFinite(percent)) {
+    return null;
+  }
+
+  return Math.min(1, Math.max(0, percent));
+}
+
+function drawImageProgressBar(pixels, width, height, x, y, rectWidth, rectHeight, progressPercent, accentColor) {
+  const percent = Math.min(1, Math.max(0, Number(progressPercent) || 0));
+  const radius = Math.floor(rectHeight / 2);
+  const inset = 4;
+  const innerWidth = Math.max(0, rectWidth - inset * 2);
+  const innerHeight = Math.max(0, rectHeight - inset * 2);
+  const fillColor = normalizeImageColor(accentColor);
+
+  drawImageRoundedRect(pixels, width, height, x, y, rectWidth, rectHeight, radius, [51, 65, 85, 255]);
+
+  if (innerWidth <= 0 || innerHeight <= 0 || percent <= 0) {
+    return;
+  }
+
+  const rawFillWidth = percent >= 1 ? innerWidth : Math.floor(innerWidth * percent);
+  const fillWidth = Math.min(innerWidth, Math.max(innerHeight, rawFillWidth));
+  drawImageRoundedRect(pixels, width, height, x + inset, y + inset, fillWidth, innerHeight, Math.floor(innerHeight / 2), fillColor);
+}
+
 function sanitizeImageText(value) {
   return String(value ?? '')
     .replace(/<@!?(\d+)>/g, '@USER')
@@ -2774,9 +2851,10 @@ function createBotCardImage(card) {
   const detailRows = (card.fields || []).map((field) => ({
     label: field.name,
     lines: wrapImageText(field.value, maxValueCharacters),
+    progress: normalizeImageProgress(field.progress),
   }));
   const descriptionHeight = descriptionLines.length > 0 ? 42 + descriptionLines.length * 40 : 0;
-  const rowsHeight = detailRows.reduce((total, row) => total + 58 + row.lines.length * 40, 0);
+  const rowsHeight = detailRows.reduce((total, row) => total + 58 + row.lines.length * 40 + (row.progress !== null ? 62 : 0), 0);
   const timestampText = new Date().toLocaleString('en-GB');
   const timestampInFooter = card.timestampPlacement === 'footer';
   const showHeaderTimestamp = !timestampInFooter && card.showHeaderTimestamp !== false;
@@ -2810,7 +2888,8 @@ function createBotCardImage(card) {
   }
 
   for (const row of detailRows) {
-    const boxHeight = 54 + row.lines.length * 40;
+    const hasProgress = row.progress !== null;
+    const boxHeight = 54 + row.lines.length * 40 + (hasProgress ? 62 : 0);
     drawImageRoundedAccentPanel(
       pixels,
       width,
@@ -2823,7 +2902,22 @@ function createBotCardImage(card) {
       card.color || cardTheme.accent
     );
     drawImageText(pixels, width, height, row.label, padding + 28, cursorY + 18, labelScale, cardTheme.label);
-    drawWrappedImageText(pixels, width, height, row.lines, padding + 28, cursorY + 56, valueScale, [248, 250, 252, 255]);
+    const textBottom = drawWrappedImageText(pixels, width, height, row.lines, padding + 28, cursorY + 56, valueScale, [248, 250, 252, 255]);
+
+    if (hasProgress) {
+      drawImageProgressBar(
+        pixels,
+        width,
+        height,
+        padding + 28,
+        textBottom + 12,
+        width - padding * 2 - 56,
+        32,
+        row.progress,
+        card.color || cardTheme.accent
+      );
+    }
+
     cursorY += boxHeight + 22;
   }
 

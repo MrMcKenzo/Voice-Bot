@@ -257,6 +257,58 @@ function Fill-CardRoundedRow {
   }
 }
 
+function Get-CardProgressPercent {
+  param($Progress)
+
+  if ($null -eq $Progress) {
+    return -1
+  }
+
+  try {
+    $percent = [double]$Progress.percent
+  } catch {
+    return -1
+  }
+
+  if ([double]::IsNaN($percent) -or [double]::IsInfinity($percent)) {
+    return -1
+  }
+
+  return [Math]::Max(0.0, [Math]::Min(1.0, $percent))
+}
+
+function Draw-CardProgressBar {
+  param(
+    [System.Drawing.Graphics]$Graphics,
+    [double]$Percent,
+    [System.Drawing.Brush]$TrackBrush,
+    [System.Drawing.Brush]$FillBrush,
+    [int]$X,
+    [int]$Y,
+    [int]$Width,
+    [int]$Height
+  )
+
+  $clamped = [Math]::Max(0.0, [Math]::Min(1.0, $Percent))
+  $radius = [int]($Height / 2)
+  Fill-CardRoundedRectangle $Graphics $TrackBrush $X $Y $Width $Height $radius
+
+  if ($clamped -le 0) {
+    return
+  }
+
+  $inset = 4
+  $innerWidth = [Math]::Max(0, $Width - ($inset * 2))
+  $innerHeight = [Math]::Max(0, $Height - ($inset * 2))
+  if ($innerWidth -le 0 -or $innerHeight -le 0) {
+    return
+  }
+
+  $fillWidth = if ($clamped -ge 1) { $innerWidth } else { [int][Math]::Floor($innerWidth * $clamped) }
+  $fillWidth = [Math]::Min($innerWidth, [Math]::Max($innerHeight, $fillWidth))
+  Fill-CardRoundedRectangle $Graphics $FillBrush ($X + $inset) ($Y + $inset) $fillWidth $innerHeight ([int]($innerHeight / 2))
+}
+
 $width = 1500
 $padding = 60
 $contentWidth = $width - ($padding * 2)
@@ -266,6 +318,7 @@ $panel = [System.Drawing.Color]::FromArgb(255, 31, 41, 55)
 $panelSoft = [System.Drawing.Color]::FromArgb(255, 30, 41, 59)
 $text = [System.Drawing.Color]::FromArgb(255, 248, 250, 252)
 $muted = [System.Drawing.Color]::FromArgb(255, 148, 163, 184)
+$progressTrack = [System.Drawing.Color]::FromArgb(255, 51, 65, 85)
 $softOrange = [System.Drawing.Color]::FromArgb(255, 254, 215, 170)
 $labelOrange = [System.Drawing.Color]::FromArgb(255, 253, 186, 116)
 
@@ -301,12 +354,17 @@ foreach ($field in @($data.fields)) {
   }
 
   $valueHeight = [Math]::Max(42, (Measure-CardText $measureGraphics $value $bodyFont ($contentWidth - 56)))
-  $rowHeight = 72 + $valueHeight
+  $progressPercent = Get-CardProgressPercent $field.progress
+  $hasProgress = $progressPercent -ge 0
+  $progressHeight = if ($hasProgress) { 58 } else { 0 }
+  $rowHeight = 72 + $valueHeight + $progressHeight
   $rows += [pscustomobject]@{
     Label = $label
     Value = $value
     Height = $rowHeight
     ValueHeight = $valueHeight
+    HasProgress = $hasProgress
+    ProgressPercent = $progressPercent
   }
 }
 
@@ -354,6 +412,7 @@ $panelBrush = New-Object System.Drawing.SolidBrush $panel
 $panelSoftBrush = New-Object System.Drawing.SolidBrush $panelSoft
 $textBrush = New-Object System.Drawing.SolidBrush $text
 $mutedBrush = New-Object System.Drawing.SolidBrush $muted
+$progressTrackBrush = New-Object System.Drawing.SolidBrush $progressTrack
 $softOrangeBrush = New-Object System.Drawing.SolidBrush $softOrange
 $labelOrangeBrush = New-Object System.Drawing.SolidBrush $labelOrange
 
@@ -399,7 +458,12 @@ if ($descriptionHeight -gt 0) {
 foreach ($row in $rows) {
   Fill-CardRoundedRow $graphics $panelBrush $accentBrush $padding $cursorY $contentWidth $row.Height 18
   Draw-CardText $graphics $row.Label $labelFont $labelOrangeBrush ($padding + 28) ($cursorY + 18) ($contentWidth - 56) 34
-  Draw-CardText $graphics $row.Value $bodyFont $textBrush ($padding + 28) ($cursorY + 56) ($contentWidth - 56) ($row.Height - 66)
+  Draw-CardText $graphics $row.Value $bodyFont $textBrush ($padding + 28) ($cursorY + 56) ($contentWidth - 56) ($row.ValueHeight + 8)
+
+  if ($row.HasProgress) {
+    Draw-CardProgressBar $graphics $row.ProgressPercent $progressTrackBrush $accentBrush ($padding + 28) ($cursorY + 68 + $row.ValueHeight) ($contentWidth - 56) 32
+  }
+
   $cursorY += $row.Height + 22
 }
 
@@ -425,6 +489,7 @@ $bitmap.Save($OutputPng, [System.Drawing.Imaging.ImageFormat]::Png)
 $labelOrangeBrush.Dispose()
 $softOrangeBrush.Dispose()
 $mutedBrush.Dispose()
+$progressTrackBrush.Dispose()
 $textBrush.Dispose()
 $panelSoftBrush.Dispose()
 $panelBrush.Dispose()
