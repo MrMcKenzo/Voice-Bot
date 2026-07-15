@@ -13,6 +13,7 @@ const {
   ChannelSelectMenuBuilder,
   ChannelType,
   Client,
+  EmbedBuilder,
   Events,
   GatewayIntentBits,
   PermissionFlagsBits,
@@ -29,6 +30,7 @@ const setupPermissionBits = PermissionFlagsBits.ManageGuild | PermissionFlagsBit
 const voiceLogPermissionNames = ['ViewChannel', 'SendMessages', 'AttachFiles'];
 const botPermissionBits =
   PermissionFlagsBits.ManageChannels |
+  PermissionFlagsBits.ManageRoles |
   PermissionFlagsBits.MoveMembers |
   PermissionFlagsBits.ViewChannel |
   PermissionFlagsBits.SendMessages |
@@ -55,6 +57,8 @@ const hostRanks = [
   { name: 'VC Royalty', xp: 2000 },
   { name: 'Eternal Host', xp: 5000 },
 ];
+const moderatorRoomHistoryLimit = 100;
+const moderatorRoomHistoryDisplayLimit = 10;
 
 if (!token) {
   console.error('Missing DISCORD_TOKEN in .env.');
@@ -185,6 +189,20 @@ const guildCommands = [
       {
         name: 'member',
         description: 'Member to view, or leave blank for yourself',
+        type: ApplicationCommandOptionType.User,
+        required: false,
+      },
+    ],
+  },
+  {
+    name: 'xp-roles',
+    description: 'Sync Discord roles for current voice XP ranks',
+    type: ApplicationCommandType.ChatInput,
+    dm_permission: false,
+    options: [
+      {
+        name: 'member',
+        description: 'Member to sync, or leave blank to sync all known XP members',
         type: ApplicationCommandOptionType.User,
         required: false,
       },
@@ -322,6 +340,48 @@ const guildCommands = [
             description: 'The empty managed active voice room',
             type: ApplicationCommandOptionType.Channel,
             channelTypes: [ChannelType.GuildVoice],
+            required: true,
+          },
+        ],
+      },
+      {
+        name: 'history',
+        description: 'Show recent moderator room actions and notes',
+        type: ApplicationCommandOptionType.Subcommand,
+        options: [
+          {
+            name: 'channel',
+            description: 'Voice room to filter history by',
+            type: ApplicationCommandOptionType.Channel,
+            channelTypes: [ChannelType.GuildVoice],
+            required: false,
+          },
+          {
+            name: 'limit',
+            description: 'Number of history entries to show',
+            type: ApplicationCommandOptionType.Integer,
+            minValue: 1,
+            maxValue: moderatorRoomHistoryDisplayLimit,
+            required: false,
+          },
+        ],
+      },
+      {
+        name: 'note',
+        description: 'Save a moderator note on a managed active voice room',
+        type: ApplicationCommandOptionType.Subcommand,
+        options: [
+          {
+            name: 'channel',
+            description: 'The managed active voice room',
+            type: ApplicationCommandOptionType.Channel,
+            channelTypes: [ChannelType.GuildVoice],
+            required: true,
+          },
+          {
+            name: 'note',
+            description: 'The note to save in room history',
+            type: ApplicationCommandOptionType.String,
             required: true,
           },
         ],
@@ -474,6 +534,57 @@ function isDiscordId(value) {
   return typeof value === 'string' && /^\d{5,}$/.test(value);
 }
 
+function normalizeModeratorHistoryDetail(detail) {
+  if (!detail || typeof detail !== 'object') {
+    return null;
+  }
+
+  const name = String(detail.name || '').trim();
+  const value = String(detail.value || '').trim();
+  if (!name || !value) {
+    return null;
+  }
+
+  return {
+    name: name.slice(0, 100),
+    value: value.slice(0, 1000),
+  };
+}
+
+function normalizeModeratorRoomHistoryEntry(entry) {
+  if (!entry || typeof entry !== 'object') {
+    return null;
+  }
+
+  const createdAt = typeof entry.createdAt === 'string' && !Number.isNaN(Date.parse(entry.createdAt))
+    ? entry.createdAt
+    : null;
+  if (!createdAt) {
+    return null;
+  }
+
+  const action = String(entry.action || '').trim();
+  if (!action) {
+    return null;
+  }
+
+  const details = Array.isArray(entry.details)
+    ? entry.details.map(normalizeModeratorHistoryDetail).filter(Boolean).slice(0, 8)
+    : [];
+
+  return {
+    id: String(entry.id || `${Date.parse(createdAt)}-${Math.random().toString(36).slice(2, 8)}`),
+    type: entry.type === 'note' ? 'note' : 'action',
+    action: action.slice(0, 120),
+    createdAt,
+    moderatorId: isDiscordId(entry.moderatorId) ? entry.moderatorId : null,
+    moderatorTag: typeof entry.moderatorTag === 'string' ? entry.moderatorTag.slice(0, 120) : null,
+    roomId: isDiscordId(entry.roomId) ? entry.roomId : null,
+    roomName: typeof entry.roomName === 'string' ? entry.roomName.slice(0, 100) : null,
+    details,
+  };
+}
+
 function ensureGuildState(guildId) {
   ensureStateShape();
 
@@ -514,6 +625,16 @@ function ensureGuildState(guildId) {
   guildState.commandAccessRoleUpdatedAt = typeof guildState.commandAccessRoleUpdatedAt === 'string'
     ? guildState.commandAccessRoleUpdatedAt
     : null;
+
+  if (!Array.isArray(guildState.moderatorRoomHistory)) {
+    guildState.moderatorRoomHistory = [];
+  }
+
+  guildState.moderatorRoomHistory = guildState.moderatorRoomHistory
+    .map(normalizeModeratorRoomHistoryEntry)
+    .filter(Boolean)
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+    .slice(0, moderatorRoomHistoryLimit);
 
   if (!guildState.hostStats || typeof guildState.hostStats !== 'object' || Array.isArray(guildState.hostStats)) {
     guildState.hostStats = {};
@@ -733,6 +854,61 @@ function saveCommandAccessRole(guildId, roleId, updatedBy) {
   return getCommandAccessRoleId(guildId);
 }
 
+function createModeratorRoomHistoryId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function recordModeratorRoomHistory(guildId, entry) {
+  if (!isDiscordId(guildId)) {
+    return null;
+  }
+
+  const guildState = ensureGuildState(guildId);
+  const normalizedEntry = normalizeModeratorRoomHistoryEntry({
+    ...entry,
+    id: entry.id || createModeratorRoomHistoryId(),
+    createdAt: entry.createdAt || new Date().toISOString(),
+  });
+
+  if (!normalizedEntry) {
+    return null;
+  }
+
+  guildState.moderatorRoomHistory.unshift(normalizedEntry);
+  guildState.moderatorRoomHistory = guildState.moderatorRoomHistory.slice(0, moderatorRoomHistoryLimit);
+  saveState();
+  return normalizedEntry;
+}
+
+function recordModeratorAuditHistory(guild, auditEntry) {
+  if (!guild || !auditEntry?.moderator || !auditEntry?.action) {
+    return null;
+  }
+
+  return recordModeratorRoomHistory(guild.id, {
+    type: auditEntry.type === 'note' ? 'note' : 'action',
+    action: auditEntry.action,
+    moderatorId: auditEntry.moderator.id,
+    moderatorTag: auditEntry.moderator.user?.tag || auditEntry.moderator.displayName || auditEntry.moderator.id,
+    roomId: auditEntry.voiceChannel?.id || null,
+    roomName: auditEntry.voiceChannel?.name || null,
+    details: auditEntry.details || [],
+  });
+}
+
+function getModeratorRoomHistory(guildId, options = {}) {
+  const guildState = ensureGuildState(guildId);
+  const channelId = isDiscordId(options.channelId) ? options.channelId : null;
+  const limit = Math.min(
+    Math.max(Math.floor(Number(options.limit) || moderatorRoomHistoryDisplayLimit), 1),
+    moderatorRoomHistoryDisplayLimit
+  );
+
+  return guildState.moderatorRoomHistory
+    .filter((entry) => !channelId || entry.roomId === channelId)
+    .slice(0, limit);
+}
+
 function toIsoDate(value = new Date()) {
   const date = value instanceof Date ? value : new Date(value);
   return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
@@ -874,6 +1050,245 @@ function getMemberRankProgress(xp) {
   return getRankProgress(memberRanks, xp);
 }
 
+function getXpRankTrackRanks(track) {
+  if (track === 'host') {
+    return hostRanks;
+  }
+
+  if (track === 'member') {
+    return memberRanks;
+  }
+
+  return null;
+}
+
+function getXpRankTrackLabel(track) {
+  return track === 'host' ? 'Host' : 'Voice Member';
+}
+
+function getXpRankNames(track) {
+  const ranks = getXpRankTrackRanks(track);
+  return ranks ? ranks.map((rank) => rank.name) : [];
+}
+
+function getXpRankNameForMember(member, track) {
+  if (!member?.guild) {
+    return null;
+  }
+
+  if (track === 'host') {
+    return getHostStatsSnapshot(member.guild, member.id).rank.currentRank.name;
+  }
+
+  if (track === 'member') {
+    return getMemberStatsSnapshot(member.guild, member.id).rank.currentRank.name;
+  }
+
+  return null;
+}
+
+function hasTrackedXpStats(guildId, userId, track) {
+  const guildState = ensureGuildState(guildId);
+  if (track === 'host') {
+    return Object.prototype.hasOwnProperty.call(guildState.hostStats || {}, userId);
+  }
+
+  if (track === 'member') {
+    return Object.prototype.hasOwnProperty.call(guildState.memberStats || {}, userId);
+  }
+
+  return false;
+}
+
+function findGuildRoleByName(guild, roleName) {
+  if (!guild?.roles?.cache || !roleName) {
+    return null;
+  }
+
+  return guild.roles.cache.find((role) => role.name === roleName) ||
+    guild.roles.cache.find((role) => role.name.toLowerCase() === roleName.toLowerCase()) ||
+    null;
+}
+
+function memberHasDiscordRole(member, roleId) {
+  return Boolean(member?.roles?.cache?.has(roleId));
+}
+
+function getBotRoleManagementIssue(guild, role) {
+  const botMember = guild?.members?.me;
+  if (!botMember) {
+    return 'I could not check my server member profile.';
+  }
+
+  if (!botMember.permissions?.has(PermissionFlagsBits.ManageRoles)) {
+    return 'I need Manage Roles.';
+  }
+
+  if (role.managed) {
+    return `${role.name} is managed by an integration.`;
+  }
+
+  const highestRole = botMember.roles?.highest;
+  if (highestRole && typeof highestRole.comparePositionTo === 'function' && highestRole.comparePositionTo(role) <= 0) {
+    return `${role.name} is higher than or equal to my highest role.`;
+  }
+
+  return null;
+}
+
+async function fetchGuildMember(guild, userId) {
+  if (!guild || !isDiscordId(userId)) {
+    return null;
+  }
+
+  return guild.members.cache.get(userId) || await guild.members.fetch(userId).catch(() => null);
+}
+
+async function syncXpRankRoleForTrack(member, track) {
+  const rankNames = getXpRankNames(track);
+  const rankName = getXpRankNameForMember(member, track);
+  if (!member || member.user?.bot || !rankName || rankNames.length === 0) {
+    return { track, status: 'skipped' };
+  }
+
+  const currentRole = findGuildRoleByName(member.guild, rankName);
+  if (!currentRole) {
+    return { track, status: 'missing-role', rankName };
+  }
+
+  const currentRoleIssue = getBotRoleManagementIssue(member.guild, currentRole);
+  if (currentRoleIssue) {
+    return { track, status: 'blocked', rankName, issue: currentRoleIssue };
+  }
+
+  const obsoleteRoles = rankNames
+    .filter((name) => name.toLowerCase() !== rankName.toLowerCase())
+    .map((name) => findGuildRoleByName(member.guild, name))
+    .filter((role) => role && memberHasDiscordRole(member, role.id));
+
+  const removableRoles = [];
+  const blockedRoles = [];
+  for (const role of obsoleteRoles) {
+    const issue = getBotRoleManagementIssue(member.guild, role);
+    if (issue) {
+      blockedRoles.push(`${role.name}: ${issue}`);
+    } else {
+      removableRoles.push(role);
+    }
+  }
+
+  if (removableRoles.length > 0) {
+    await member.roles.remove(removableRoles, `Voice XP rank changed to ${rankName}`);
+  }
+
+  const assigned = !memberHasDiscordRole(member, currentRole.id);
+  if (assigned) {
+    await member.roles.add(currentRole, `Voice XP rank reward: ${rankName}`);
+  }
+
+  return {
+    track,
+    status: blockedRoles.length > 0 ? 'partial' : 'synced',
+    rankName,
+    assigned,
+    removed: removableRoles.length,
+    blockedRoles,
+  };
+}
+
+async function syncXpRankRolesForMember(member, tracks = ['host', 'member']) {
+  const results = [];
+  for (const track of tracks) {
+    if (!hasTrackedXpStats(member.guild.id, member.id, track)) {
+      results.push({ track, status: 'no-stats' });
+      continue;
+    }
+
+    results.push(await syncXpRankRoleForTrack(member, track));
+  }
+
+  return results;
+}
+
+async function syncKnownXpRankRoles(guild, member = null) {
+  const guildState = ensureGuildState(guild.id);
+  const userIds = member
+    ? [member.id]
+    : [...new Set([
+      ...Object.keys(guildState.hostStats || {}),
+      ...Object.keys(guildState.memberStats || {}),
+    ])];
+
+  const summary = {
+    memberCount: 0,
+    trackCount: 0,
+    assigned: 0,
+    removed: 0,
+    missingRoles: new Set(),
+    blockedRoles: new Set(),
+    noStats: 0,
+    missingMembers: 0,
+  };
+
+  for (const userId of userIds) {
+    const guildMember = member?.id === userId ? member : await fetchGuildMember(guild, userId);
+    if (!guildMember) {
+      summary.missingMembers += 1;
+      continue;
+    }
+
+    summary.memberCount += 1;
+    const results = await syncXpRankRolesForMember(guildMember);
+    for (const result of results) {
+      if (result.status === 'no-stats') {
+        summary.noStats += 1;
+        continue;
+      }
+
+      summary.trackCount += 1;
+      if (result.status === 'missing-role') {
+        summary.missingRoles.add(result.rankName);
+      }
+
+      if (result.status === 'blocked') {
+        summary.blockedRoles.add(`${result.rankName}: ${result.issue}`);
+      }
+
+      for (const blockedRole of result.blockedRoles || []) {
+        summary.blockedRoles.add(blockedRole);
+      }
+
+      summary.assigned += result.assigned ? 1 : 0;
+      summary.removed += result.removed || 0;
+    }
+  }
+
+  return summary;
+}
+
+function queueXpRankRoleSync(guildId, userId, track) {
+  if (!isDiscordId(guildId) || !isDiscordId(userId) || !getXpRankTrackRanks(track)) {
+    return;
+  }
+
+  const guild = client.guilds.cache.get(guildId);
+  if (!guild) {
+    return;
+  }
+
+  fetchGuildMember(guild, userId)
+    .then((member) => {
+      if (!member) {
+        return null;
+      }
+
+      return syncXpRankRoleForTrack(member, track);
+    })
+    .catch((error) => {
+      console.warn(`Could not sync ${getXpRankTrackLabel(track)} XP rank role for ${userId}:`, error);
+    });
+}
+
 function updateDailyStreak(stats, dateField, activityAt = new Date()) {
   if (!stats) {
     return;
@@ -973,6 +1388,7 @@ function recordHostSessionStart(guildId, userId, voiceChannel, startedAt = new D
   stats.lastHostedAt = startedIso;
   stats.lastRoomName = voiceChannel?.name || stats.lastRoomName || null;
   stats.updatedAt = startedIso;
+  queueXpRankRoleSync(guildId, userId, 'host');
 }
 
 function closeHostSession(guildId, userId, startedAt, endedAt = new Date(), roomName = null) {
@@ -995,6 +1411,7 @@ function closeHostSession(guildId, userId, startedAt, endedAt = new Date(), room
   stats.lastHostedAt = endedIso;
   stats.lastRoomName = roomName || stats.lastRoomName || null;
   stats.updatedAt = endedIso;
+  queueXpRankRoleSync(guildId, userId, 'host');
 }
 
 function normalizeActiveMemberSessions(memberSessions, ownerId = null) {
@@ -1049,6 +1466,7 @@ function closeMemberSession(guildId, userId, startedAt, endedAt = new Date(), ro
   stats.lastVoiceAt = endedIso;
   stats.lastRoomName = roomName || stats.lastRoomName || null;
   stats.updatedAt = endedIso;
+  queueXpRankRoleSync(guildId, userId, 'member');
 }
 
 function closeSavedMemberSession(savedChannel, userId, endedAt = new Date(), roomName = null) {
@@ -3003,6 +3421,18 @@ function createCardAttachment(card, slug = 'voice-room-bot') {
   });
 }
 
+function createReadableCardAttachment(card, slug = 'voice-room-bot') {
+  const image = renderCardImage(card);
+  if (!image) {
+    return null;
+  }
+
+  const safeSlug = slug.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'voice-room-bot';
+  return new AttachmentBuilder(image, {
+    name: `${safeSlug}-${Date.now()}.png`,
+  });
+}
+
 function buildStatusCard(title, message, options = {}) {
   const color = options.color || (options.type === 'error'
     ? [237, 66, 69, 255]
@@ -3026,6 +3456,8 @@ async function sendModeratorAuditLog(guild, auditEntry) {
   if (!guild || !auditEntry?.moderator || !auditEntry?.action) {
     return;
   }
+
+  recordModeratorAuditHistory(guild, auditEntry);
 
   const settings = getVoiceLogSettings(guild.id);
   if (!settings.enabled || !settings.channelId) {
@@ -3382,6 +3814,7 @@ function buildHelpCard(interaction, page = 'general') {
   const canConfigureRole = canConfigureAccessRole(interaction);
   const canRunLogs = canManageLogs(interaction);
   const canRunTopHosts = canViewTopHosts(interaction);
+  const canRunXpRoles = canManageXpRoles(interaction);
   const canRunModeratorOverride = canUseModeratorOverride(interaction);
   const fields = [];
   const notes = [];
@@ -3435,6 +3868,15 @@ function buildHelpCard(interaction, page = 'general') {
     } else {
       notes.push('Top hosts requires Manage Server, Manage Channels, the configured access role, or bot owner access.');
     }
+
+    if (canRunXpRoles) {
+      fields.push({
+        name: '/xp-roles member:@user',
+        value: 'Syncs Discord roles named after the current host and voice XP ranks.',
+      });
+    } else {
+      notes.push('XP role sync requires Manage Server, Manage Channels, the configured access role, or bot owner access.');
+    }
   }
 
   if (activePage === 'logging') {
@@ -3478,6 +3920,14 @@ function buildHelpCard(interaction, page = 'general') {
         {
           name: '/mr close channel:#room',
           value: 'Returns an empty managed room to the archive category.',
+        },
+        {
+          name: '/mr history channel:#room',
+          value: 'Shows recent moderator actions and notes for managed rooms.',
+        },
+        {
+          name: '/mr note channel:#room note:text',
+          value: 'Saves a moderator note on a managed active room.',
         }
       );
     } else {
@@ -3530,7 +3980,7 @@ function buildHelpCard(interaction, page = 'general') {
     });
   }
 
-  return createCardAttachment({
+  return {
     badge: 'HLP',
     title: helpPages[activePage].title,
     subtitle: 'Voice Room Bot Help',
@@ -3539,7 +3989,68 @@ function buildHelpCard(interaction, page = 'general') {
     footer: null,
     timestampPlacement: 'footer',
     footerRight: `Requested by ${formatHelpRequester(interaction)}`,
+  };
+}
+
+function getHelpFooterLeft() {
+  return new Date().toLocaleString('en-GB');
+}
+
+function getCardColorNumber(card) {
+  const color = normalizeImageColor(card?.color || cardTheme.accent);
+  return (color[0] << 16) | (color[1] << 8) | color[2];
+}
+
+function buildHelpEmbed(interaction, page, card) {
+  const activePage = getHelpPage(page);
+  const avatarUrl = getBotAvatarUrl();
+  const author = { name: 'Voice Room Bot Help' };
+  if (avatarUrl) {
+    author.iconURL = avatarUrl;
+  }
+
+  const embed = new EmbedBuilder()
+    .setAuthor(author)
+    .setTitle(helpPages[activePage].title)
+    .setColor(getCardColorNumber(card))
+    .setFooter({
+      text: `${getHelpFooterLeft()} | Requested by ${formatHelpRequester(interaction)}`,
+    });
+
+  if (card.description) {
+    embed.setDescription(card.description);
+  }
+
+  embed.addFields((card.fields || []).map((field) => ({
+    name: field.name,
+    value: field.value,
+    inline: Boolean(field.inline),
+  })));
+
+  return embed;
+}
+
+function buildHelpMessagePayload(interaction, page = 'general') {
+  const activePage = getHelpPage(page);
+  const card = buildHelpCard(interaction, activePage);
+  const attachment = createReadableCardAttachment({
+    ...card,
+    footerLeft: getHelpFooterLeft(),
+    footerRight: `Requested by ${formatHelpRequester(interaction)}`,
+    timestampPlacement: 'footer',
   }, `help-${activePage}`);
+
+  if (attachment) {
+    return {
+      files: [attachment],
+      embeds: [],
+    };
+  }
+
+  return {
+    files: [],
+    embeds: [buildHelpEmbed(interaction, activePage, card)],
+  };
 }
 
 async function handleHelpCommand(interaction) {
@@ -3549,8 +4060,9 @@ async function handleHelpCommand(interaction) {
   }
 
   await interaction.deferReply();
+  const helpPayload = buildHelpMessagePayload(interaction, 'general');
   await interaction.editReply({
-    files: [buildHelpCard(interaction, 'general')],
+    ...helpPayload,
     components: [buildHelpMenu(interaction.user.id, 'general')],
   });
 }
@@ -3576,9 +4088,10 @@ async function handleHelpPageSelect(interaction) {
 
   const page = getHelpPage(interaction.values[0]);
   await interaction.deferUpdate();
+  const helpPayload = buildHelpMessagePayload(interaction, page);
   await interaction.editReply({
     attachments: [],
-    files: [buildHelpCard(interaction, page)],
+    ...helpPayload,
     components: [buildHelpMenu(ownerId, page)],
   });
 }
@@ -3662,6 +4175,106 @@ async function handleVoiceProfileCommand(interaction) {
   await interaction.editReply({
     attachments: [],
     files: [await buildVoiceProfileCard(interaction.guild, requestedUser.id)],
+  });
+}
+
+function formatSetPreview(values, emptyText) {
+  const list = [...values].filter(Boolean);
+  if (list.length === 0) {
+    return emptyText;
+  }
+
+  return truncateFieldValue(list.slice(0, 10).join('\n'));
+}
+
+function buildXpRolesSyncCard(summary, options = {}) {
+  const fields = [
+    {
+      name: 'Scope',
+      value: options.member
+        ? `${options.member} (${options.member.user.tag})`
+        : `${summary.memberCount} known XP member(s) checked`,
+      inline: false,
+    },
+    {
+      name: 'Updated',
+      value: [
+        `${summary.assigned} current rank role(s) added`,
+        `${summary.removed} old rank role(s) removed`,
+        `${summary.trackCount} XP track(s) checked`,
+      ].join('\n'),
+      inline: false,
+    },
+  ];
+
+  if (summary.missingRoles.size > 0) {
+    fields.push({
+      name: 'Missing Discord Roles',
+      value: formatSetPreview(summary.missingRoles, 'None'),
+      inline: false,
+    });
+  }
+
+  if (summary.blockedRoles.size > 0) {
+    fields.push({
+      name: 'Roles I Could Not Manage',
+      value: formatSetPreview(summary.blockedRoles, 'None'),
+      inline: false,
+    });
+  }
+
+  if (summary.noStats > 0 || summary.missingMembers > 0) {
+    fields.push({
+      name: 'Skipped',
+      value: [
+        summary.noStats > 0 ? `${summary.noStats} XP track(s) had no stored stats` : null,
+        summary.missingMembers > 0 ? `${summary.missingMembers} saved member(s) could not be fetched` : null,
+      ].filter(Boolean).join('\n'),
+      inline: false,
+    });
+  }
+
+  return createCardAttachment({
+    badge: 'XP',
+    title: 'XP Rank Roles Synced',
+    description: 'Rank roles use the existing XP rank names. Create Discord roles with those exact names to enable rewards.',
+    fields,
+    footer: 'The bot needs Manage Roles and its highest role must be above the XP rank roles.',
+  }, 'xp-roles');
+}
+
+async function handleXpRolesCommand(interaction) {
+  if (!interaction.guild) {
+    await interaction.reply({ files: [buildStatusCard('XP Rank Roles', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
+    return;
+  }
+
+  if (!canManageXpRoles(interaction)) {
+    await interaction.reply({
+      files: [buildStatusCard('XP Rank Roles', 'You need Manage Server, Manage Channels, the configured access role, or bot owner access to sync XP rank roles.', { type: 'error', badge: 'ERR' })],
+    });
+    return;
+  }
+
+  const requestedUser = interaction.options.getUser('member');
+  await interaction.deferReply();
+
+  const requestedMember = requestedUser
+    ? await fetchGuildMember(interaction.guild, requestedUser.id)
+    : null;
+
+  if (requestedUser && !requestedMember) {
+    await interaction.editReply({
+      attachments: [],
+      files: [buildStatusCard('XP Rank Roles', 'I could not find that member in this server.', { type: 'error', badge: 'ERR' })],
+    });
+    return;
+  }
+
+  const summary = await syncKnownXpRankRoles(interaction.guild, requestedMember);
+  await interaction.editReply({
+    attachments: [],
+    files: [buildXpRolesSyncCard(summary, { member: requestedMember })],
   });
 }
 
@@ -3971,10 +4584,74 @@ function buildModRoomHelpCard() {
       {
         name: '/mr close channel:#room',
         value: 'Returns an empty managed room to the archive category.',
+      },
+      {
+        name: '/mr history channel:#room',
+        value: 'Shows recent moderator actions and notes. Leave channel blank to see the latest room history across the server.',
+      },
+      {
+        name: '/mr note channel:#room note:text',
+        value: 'Saves a moderator note on a managed active room and adds it to the audit history.',
       }
     ],
     footer: 'Requires Manage Server, Manage Channels, Moderate Members, the configured access role, or bot owner access. Successful actions are audited as image cards when logging is enabled.',
   }, 'mr-help');
+}
+
+function formatModeratorHistoryDate(createdAt) {
+  const date = new Date(createdAt);
+  if (Number.isNaN(date.getTime())) {
+    return 'Unknown time';
+  }
+
+  return date.toLocaleString('en-GB');
+}
+
+function buildModeratorRoomHistoryCard(guild, entries, options = {}) {
+  const filterChannel = options.channel || null;
+  const fields = entries.map((entry) => {
+    const lines = [];
+    if (entry.roomId || entry.roomName) {
+      const room = entry.roomId ? guild.channels.cache.get(entry.roomId) : null;
+      lines.push(`Room: ${room ? `${room} (${room.name})` : entry.roomName || `<#${entry.roomId}>`}`);
+    }
+
+    if (entry.moderatorId || entry.moderatorTag) {
+      lines.push(`Moderator: ${entry.moderatorId ? `<@${entry.moderatorId}>` : entry.moderatorTag}`);
+    }
+
+    for (const detail of entry.details || []) {
+      lines.push(`${detail.name}: ${detail.value}`);
+    }
+
+    return {
+      name: `${formatModeratorHistoryDate(entry.createdAt)} - ${entry.action}`,
+      value: truncateFieldValue(lines.length > 0 ? lines.join('\n') : 'No extra details saved.'),
+      inline: false,
+    };
+  });
+
+  if (fields.length === 0) {
+    fields.push({
+      name: 'No history yet',
+      value: filterChannel
+        ? `No moderator history is saved for ${filterChannel}.`
+        : 'Moderator actions and notes will appear here after staff use /mr controls.',
+      inline: false,
+    });
+  }
+
+  return createCardAttachment({
+    badge: 'HIS',
+    title: 'Moderator Room History',
+    description: filterChannel ? `Filtered to ${filterChannel.name}.` : 'Latest moderator room actions and notes.',
+    fields,
+    footer: `The bot keeps the latest ${moderatorRoomHistoryLimit} moderator room history entries per server.`,
+  }, 'mr-history');
+}
+
+function normalizeModeratorNoteText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, 500);
 }
 
 async function handleModRoomCommand(interaction) {
@@ -3993,6 +4670,25 @@ async function handleModRoomCommand(interaction) {
   const subcommand = interaction.options.getSubcommand();
   if (subcommand === 'help') {
     await interaction.reply({ files: [buildModRoomHelpCard()] });
+    return;
+  }
+
+  if (subcommand === 'history') {
+    const filterChannel = interaction.options.getChannel('channel');
+    if (filterChannel && filterChannel.type !== ChannelType.GuildVoice) {
+      await interaction.reply({ files: [buildStatusCard('Moderator Room History', 'Choose a voice channel to filter history.', { type: 'error', badge: 'ERR' })] });
+      return;
+    }
+
+    const requestedLimit = interaction.options.getInteger('limit') || moderatorRoomHistoryDisplayLimit;
+    const entries = getModeratorRoomHistory(interaction.guild.id, {
+      channelId: filterChannel?.id || null,
+      limit: requestedLimit,
+    });
+
+    await interaction.reply({
+      files: [buildModeratorRoomHistoryCard(interaction.guild, entries, { channel: filterChannel })],
+    });
     return;
   }
 
@@ -4116,6 +4812,26 @@ async function handleModRoomCommand(interaction) {
       return;
     }
 
+    if (subcommand === 'note') {
+      const note = normalizeModeratorNoteText(interaction.options.getString('note'));
+      if (!note) {
+        await interaction.editReply({ attachments: [], files: [buildStatusCard('Moderator Room Override', 'Write a note before saving it.', { type: 'error', badge: 'ERR' })] });
+        return;
+      }
+
+      await sendModeratorAuditLog(interaction.guild, {
+        type: 'note',
+        action: 'Added a moderator room note',
+        moderator: interaction.member,
+        voiceChannel,
+        details: [
+          { name: 'Note', value: note, inline: false },
+        ],
+      });
+      await interaction.editReply({ attachments: [], files: [buildStatusCard('Moderator Room Override', `Saved a moderator note for ${voiceChannel}.`, { type: 'success', badge: 'MR' })] });
+      return;
+    }
+
     await interaction.editReply({ attachments: [], files: [buildStatusCard('Moderator Room Override', 'That moderator override action is not supported.', { type: 'error', badge: 'ERR' })] });
   } catch (error) {
     console.error('Failed to run moderator room override:', error);
@@ -4230,6 +4946,18 @@ async function handleTransferOwnerCommand(interaction) {
     moderator: isOwnerAction ? null : interaction.member,
   });
 
+  if (!isOwnerAction) {
+    await sendModeratorAuditLog(interaction.guild, {
+      action: 'Transferred room ownership',
+      moderator: interaction.member,
+      voiceChannel: memberVoiceChannel,
+      details: [
+        { name: 'Previous owner', value: previousOwner ? `${previousOwner} (${previousOwner.user.tag})` : `<@${ownerId}>`, inline: false },
+        { name: 'New owner', value: `${result.targetMember} (${result.targetMember.user.tag})`, inline: false },
+      ],
+    });
+  }
+
   await interaction.editReply({
     attachments: [],
     files: [buildStatusCard('Transfer Ownership', `${result.targetMember} is now the owner of ${memberVoiceChannel}.`, { type: 'success', badge: 'OWN' })],
@@ -4272,12 +5000,25 @@ async function handleRenameRoomCommand(interaction) {
   await interaction.deferReply();
 
   try {
+    const previousName = memberVoiceChannel.name;
     await memberVoiceChannel.setName(requestedName);
     const savedChannel = botState.activeChannels[memberVoiceChannel.id];
     if (savedChannel) {
       savedChannel.channelName = requestedName;
       savedChannel.updatedAt = new Date().toISOString();
       saveState();
+    }
+
+    if (interaction.member.id !== ownerId) {
+      await sendModeratorAuditLog(interaction.guild, {
+        action: 'Renamed a managed room',
+        moderator: interaction.member,
+        voiceChannel: memberVoiceChannel,
+        details: [
+          { name: 'Previous name', value: previousName, inline: true },
+          { name: 'New name', value: requestedName, inline: true },
+        ],
+      });
     }
 
     await interaction.editReply({ attachments: [], files: [buildStatusCard('Rename Room', `${memberVoiceChannel} has been renamed to ${requestedName}.`, { type: 'success', badge: 'REN' })] });
@@ -4334,6 +5075,18 @@ async function handleTransferOwnerSelect(interaction) {
     reason: isOwnerAction ? 'manual' : 'override',
     moderator: isOwnerAction ? null : interaction.member,
   });
+
+  if (!isOwnerAction) {
+    await sendModeratorAuditLog(interaction.guild, {
+      action: 'Transferred room ownership',
+      moderator: interaction.member,
+      voiceChannel,
+      details: [
+        { name: 'Previous owner', value: previousOwner ? `${previousOwner} (${previousOwner.user.tag})` : `<@${ownerId}>`, inline: false },
+        { name: 'New owner', value: `${result.targetMember} (${result.targetMember.user.tag})`, inline: false },
+      ],
+    });
+  }
 
   await interaction.editReply({
     attachments: [],
@@ -4416,6 +5169,10 @@ function canManageSetup(interaction) {
 }
 
 function canViewTopHosts(interaction) {
+  return canManageSetup(interaction);
+}
+
+function canManageXpRoles(interaction) {
   return canManageSetup(interaction);
 }
 
@@ -5036,6 +5793,11 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
+    if (interaction.commandName === 'xp-roles') {
+      await handleXpRolesCommand(interaction);
+      return;
+    }
+
     if (interaction.commandName === 'logs') {
       await handleLogsCommand(interaction);
       return;
@@ -5141,7 +5903,19 @@ client.on('interactionCreate', async (interaction) => {
   try {
     await interaction.deferUpdate();
     const selectedLimit = Number(interaction.values[0]);
-    await voiceChannel.setUserLimit(selectedLimit);
+    const previousLimit = formatUserLimit(voiceChannel);
+    const updatedChannel = await voiceChannel.setUserLimit(selectedLimit);
+    if (interaction.member?.id !== ownerId) {
+      await sendModeratorAuditLog(interaction.guild, {
+        action: 'Changed a managed room user limit',
+        moderator: interaction.member,
+        voiceChannel: updatedChannel,
+        details: [
+          { name: 'Previous limit', value: previousLimit, inline: true },
+          { name: 'New limit', value: formatUserLimit(updatedChannel), inline: true },
+        ],
+      });
+    }
     await interaction.editReply({
       attachments: [],
       files: [buildCapacityCard(selectedLimit)],
