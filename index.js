@@ -221,7 +221,7 @@ const guildCommands = [
     options: [
       {
         name: 'channel',
-        description: 'Text channel where voice activity and moderator audit logs should be sent',
+        description: 'Text channel where voice activity logs should be sent',
         type: ApplicationCommandOptionType.Channel,
         channelTypes: [ChannelType.GuildText],
         required: false,
@@ -229,6 +229,19 @@ const guildCommands = [
       {
         name: 'enabled',
         description: 'Turn voice activity logging on or off',
+        type: ApplicationCommandOptionType.Boolean,
+        required: false,
+      },
+      {
+        name: 'moderator-channel',
+        description: 'Text channel where moderator command logs should be sent',
+        type: ApplicationCommandOptionType.Channel,
+        channelTypes: [ChannelType.GuildText],
+        required: false,
+      },
+      {
+        name: 'moderator-enabled',
+        description: 'Turn moderator command logging on or off',
         type: ApplicationCommandOptionType.Boolean,
         required: false,
       },
@@ -619,6 +632,21 @@ function ensureGuildState(guildId) {
 
   guildState.voiceLogs.enabled = Boolean(guildState.voiceLogs.enabled && guildState.voiceLogs.channelId);
 
+  if (!guildState.moderatorLogs || typeof guildState.moderatorLogs !== 'object') {
+    guildState.moderatorLogs = {
+      channelId: guildState.voiceLogs.channelId,
+      enabled: Boolean(guildState.voiceLogs.enabled && guildState.voiceLogs.channelId),
+      updatedBy: guildState.voiceLogs.updatedBy || null,
+      updatedAt: guildState.voiceLogs.updatedAt || null,
+    };
+  }
+
+  if (!isDiscordId(guildState.moderatorLogs.channelId)) {
+    guildState.moderatorLogs.channelId = null;
+  }
+
+  guildState.moderatorLogs.enabled = Boolean(guildState.moderatorLogs.enabled && guildState.moderatorLogs.channelId);
+
   if (!isDiscordId(guildState.commandAccessRoleId)) {
     guildState.commandAccessRoleId = null;
   }
@@ -843,6 +871,28 @@ function saveVoiceLogSettings(guildId, settings) {
   };
   saveState();
   return getVoiceLogSettings(guildId);
+}
+
+function getModeratorLogSettings(guildId) {
+  const guildState = ensureGuildState(guildId);
+  return {
+    channelId: guildState.moderatorLogs.channelId,
+    enabled: Boolean(guildState.moderatorLogs.enabled && guildState.moderatorLogs.channelId),
+    updatedBy: guildState.moderatorLogs.updatedBy || null,
+    updatedAt: guildState.moderatorLogs.updatedAt || null,
+  };
+}
+
+function saveModeratorLogSettings(guildId, settings) {
+  const guildState = ensureGuildState(guildId);
+  guildState.moderatorLogs = {
+    channelId: isDiscordId(settings.channelId) ? settings.channelId : null,
+    enabled: Boolean(settings.enabled && isDiscordId(settings.channelId)),
+    updatedBy: settings.updatedBy || null,
+    updatedAt: new Date().toISOString(),
+  };
+  saveState();
+  return getModeratorLogSettings(guildId);
 }
 
 function getCommandAccessRoleId(guildId) {
@@ -3889,7 +3939,7 @@ async function sendModeratorAuditLog(guild, auditEntry) {
 
   recordModeratorAuditHistory(guild, auditEntry);
 
-  const settings = getVoiceLogSettings(guild.id);
+  const settings = getModeratorLogSettings(guild.id);
   if (!settings.enabled || !settings.channelId) {
     return;
   }
@@ -4309,8 +4359,12 @@ function buildHelpCard(interaction, page = 'general') {
   if (activePage === 'logging') {
     if (canRunLogs) {
       fields.push({
-        name: '/logs channel:#logs enabled:true',
-        value: 'Sets, checks, enables, or disables voice activity and moderator audit logging.',
+        name: '/logs channel:#voice-logs enabled:true',
+        value: 'Sets, checks, enables, or disables voice activity logging.',
+      });
+      fields.push({
+        name: '/logs moderator-channel:#mod-logs moderator-enabled:true',
+        value: 'Sends moderator command audit cards to a custom Discord text channel.',
       });
     } else {
       notes.push('Logging requires Manage Server, Manage Channels, Moderate Members, the configured access role, or bot owner access.');
@@ -4731,16 +4785,29 @@ async function getVoiceLogChannel(guild, channelId) {
   return guild.channels.cache.get(channelId) || await guild.channels.fetch(channelId).catch(() => null);
 }
 
-function formatVoiceLogStatus(settings) {
+function formatSingleLogStatus(settings, optionName) {
   if (settings.enabled && settings.channelId) {
-    return `Voice activity and moderator audit logging are enabled in <#${settings.channelId}>.`;
+    return `Enabled in <#${settings.channelId}>.`;
   }
 
   if (settings.channelId) {
-    return `Voice activity and moderator audit logging are disabled. Saved log channel: <#${settings.channelId}>.`;
+    return `Disabled. Saved channel: <#${settings.channelId}>.`;
   }
 
-  return 'Logging is not configured yet. Use `/logs channel:#channel` to choose a text channel.';
+  return `Not configured. Use /logs ${optionName}:#channel to choose one.`;
+}
+
+function buildLogStatusFields(voiceSettings, moderatorSettings) {
+  return [
+    {
+      name: 'Voice activity',
+      value: formatSingleLogStatus(voiceSettings, 'channel'),
+    },
+    {
+      name: 'Moderator commands',
+      value: formatSingleLogStatus(moderatorSettings, 'moderator-channel'),
+    },
+  ];
 }
 
 async function handleLogsCommand(interaction) {
@@ -4751,17 +4818,27 @@ async function handleLogsCommand(interaction) {
 
   if (!canManageLogs(interaction)) {
     await interaction.reply({
-      files: [buildStatusCard('Logging', 'You need Manage Server, Manage Channels, Moderate Members, the configured access role, or bot owner access to change voice logs.', { type: 'error', badge: 'ERR' })],
+      files: [buildStatusCard('Logging', 'You need Manage Server, Manage Channels, Moderate Members, the configured access role, or bot owner access to change logging settings.', { type: 'error', badge: 'ERR' })],
     });
     return;
   }
 
   const requestedChannel = interaction.options.getChannel('channel');
   const requestedEnabled = interaction.options.getBoolean('enabled');
-  const currentSettings = getVoiceLogSettings(interaction.guild.id);
+  const requestedModeratorChannel = interaction.options.getChannel('moderator-channel');
+  const requestedModeratorEnabled = interaction.options.getBoolean('moderator-enabled');
+  const voiceRequested = Boolean(requestedChannel) || requestedEnabled !== null;
+  const moderatorRequested = Boolean(requestedModeratorChannel) || requestedModeratorEnabled !== null;
+  const currentVoiceSettings = getVoiceLogSettings(interaction.guild.id);
+  const currentModeratorSettings = getModeratorLogSettings(interaction.guild.id);
 
-  if (!requestedChannel && requestedEnabled === null) {
-    await interaction.reply({ files: [buildStatusCard('Logging', formatVoiceLogStatus(currentSettings), { badge: 'LOG' })] });
+  if (!voiceRequested && !moderatorRequested) {
+    await interaction.reply({
+      files: [buildStatusCard('Logging', 'Current Discord log channels.', {
+        badge: 'LOG',
+        fields: buildLogStatusFields(currentVoiceSettings, currentModeratorSettings),
+      })],
+    });
     return;
   }
 
@@ -4770,48 +4847,85 @@ async function handleLogsCommand(interaction) {
     return;
   }
 
-  const nextChannelId = requestedChannel?.id || currentSettings.channelId;
-  const nextEnabled = requestedEnabled === null ? Boolean(requestedChannel || currentSettings.enabled) : requestedEnabled;
+  if (requestedModeratorChannel && requestedModeratorChannel.type !== ChannelType.GuildText) {
+    await interaction.reply({ files: [buildStatusCard('Logging', 'Choose a normal text channel for moderator command logs.', { type: 'error', badge: 'ERR' })] });
+    return;
+  }
 
-  if (nextEnabled && !nextChannelId) {
+  const nextVoiceChannelId = requestedChannel?.id || currentVoiceSettings.channelId;
+  const nextVoiceEnabled = requestedEnabled === null ? Boolean(requestedChannel || currentVoiceSettings.enabled) : requestedEnabled;
+  const nextModeratorChannelId = requestedModeratorChannel?.id || currentModeratorSettings.channelId;
+  const nextModeratorEnabled = requestedModeratorEnabled === null
+    ? Boolean(requestedModeratorChannel || currentModeratorSettings.enabled)
+    : requestedModeratorEnabled;
+
+  if (voiceRequested && nextVoiceEnabled && !nextVoiceChannelId) {
     await interaction.reply({ files: [buildStatusCard('Logging', 'Choose a text channel before enabling voice logs.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
-  const logChannel = nextEnabled ? await getVoiceLogChannel(interaction.guild, nextChannelId) : requestedChannel;
-  if (nextEnabled && (!logChannel || logChannel.type !== ChannelType.GuildText)) {
-    await interaction.reply({ files: [buildStatusCard('Logging', 'I could not find that saved log channel. Choose a text channel with /logs channel:#channel.', { type: 'error', badge: 'ERR' })] });
+  if (moderatorRequested && nextModeratorEnabled && !nextModeratorChannelId) {
+    await interaction.reply({ files: [buildStatusCard('Logging', 'Choose a text channel before enabling moderator command logs.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
-  if (nextEnabled) {
+  const channelsToCheck = [];
+  if (voiceRequested && nextVoiceEnabled) {
+    const logChannel = await getVoiceLogChannel(interaction.guild, nextVoiceChannelId);
+    if (!logChannel || logChannel.type !== ChannelType.GuildText) {
+      await interaction.reply({ files: [buildStatusCard('Logging', 'I could not find the saved voice log channel. Choose a text channel with /logs channel:#channel.', { type: 'error', badge: 'ERR' })] });
+      return;
+    }
+    channelsToCheck.push({ channel: logChannel, label: 'voice logs' });
+  }
+
+  if (moderatorRequested && nextModeratorEnabled) {
+    const logChannel = await getVoiceLogChannel(interaction.guild, nextModeratorChannelId);
+    if (!logChannel || logChannel.type !== ChannelType.GuildText) {
+      await interaction.reply({ files: [buildStatusCard('Logging', 'I could not find the saved moderator log channel. Choose a text channel with /logs moderator-channel:#channel.', { type: 'error', badge: 'ERR' })] });
+      return;
+    }
+    channelsToCheck.push({ channel: logChannel, label: 'moderator command logs' });
+  }
+
+  if (channelsToCheck.length > 0) {
     const botMember = interaction.guild.members.me || await interaction.guild.members.fetchMe().catch(() => null);
     if (!botMember) {
       await interaction.reply({ files: [buildStatusCard('Logging', 'I could not check my permissions for that log channel right now.', { type: 'error', badge: 'ERR' })] });
       return;
     }
 
-    const missingPermissions = missingPermissionsFor(logChannel, botMember, voiceLogPermissionNames);
-    if (missingPermissions.length > 0) {
-      await interaction.reply({
-        files: [buildStatusCard('Logging', `I need ${formatPermissionNames(missingPermissions)} in ${logChannel} before I can send logs there.`, { type: 'error', badge: 'ERR' })],
-      });
-      return;
+    for (const { channel, label } of channelsToCheck) {
+      const missingPermissions = missingPermissionsFor(channel, botMember, voiceLogPermissionNames);
+      if (missingPermissions.length > 0) {
+        await interaction.reply({
+          files: [buildStatusCard('Logging', `I need ${formatPermissionNames(missingPermissions)} in ${channel} before I can send ${label} there.`, { type: 'error', badge: 'ERR' })],
+        });
+        return;
+      }
     }
   }
 
-  const updatedSettings = saveVoiceLogSettings(interaction.guild.id, {
-    channelId: nextChannelId,
-    enabled: nextEnabled,
-    updatedBy: interaction.user.id,
-  });
+  const updatedVoiceSettings = voiceRequested
+    ? saveVoiceLogSettings(interaction.guild.id, {
+      channelId: nextVoiceChannelId,
+      enabled: nextVoiceEnabled,
+      updatedBy: interaction.user.id,
+    })
+    : currentVoiceSettings;
+  const updatedModeratorSettings = moderatorRequested
+    ? saveModeratorLogSettings(interaction.guild.id, {
+      channelId: nextModeratorChannelId,
+      enabled: nextModeratorEnabled,
+      updatedBy: interaction.user.id,
+    })
+    : currentModeratorSettings;
 
   await interaction.reply({
-    files: [buildStatusCard('Logging', nextEnabled
-      ? `Voice activity and moderator audit logging are now enabled in <#${updatedSettings.channelId}>.`
-      : formatVoiceLogStatus(updatedSettings), {
-      type: nextEnabled ? 'success' : 'warning',
+    files: [buildStatusCard('Logging', 'Logging settings updated.', {
+      type: updatedVoiceSettings.enabled || updatedModeratorSettings.enabled ? 'success' : 'warning',
       badge: 'LOG',
+      fields: buildLogStatusFields(updatedVoiceSettings, updatedModeratorSettings),
     })],
   });
 }
