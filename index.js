@@ -13,7 +13,6 @@ const {
   ChannelSelectMenuBuilder,
   ChannelType,
   Client,
-  EmbedBuilder,
   Events,
   GatewayIntentBits,
   PermissionFlagsBits,
@@ -3996,60 +3995,21 @@ function getHelpFooterLeft() {
   return new Date().toLocaleString('en-GB');
 }
 
-function getCardColorNumber(card) {
-  const color = normalizeImageColor(card?.color || cardTheme.accent);
-  return (color[0] << 16) | (color[1] << 8) | color[2];
-}
-
-function buildHelpEmbed(interaction, page, card) {
-  const activePage = getHelpPage(page);
-  const avatarUrl = getBotAvatarUrl();
-  const author = { name: 'Voice Room Bot Help' };
-  if (avatarUrl) {
-    author.iconURL = avatarUrl;
-  }
-
-  const embed = new EmbedBuilder()
-    .setAuthor(author)
-    .setTitle(helpPages[activePage].title)
-    .setColor(getCardColorNumber(card))
-    .setFooter({
-      text: `${getHelpFooterLeft()} | Requested by ${formatHelpRequester(interaction)}`,
-    });
-
-  if (card.description) {
-    embed.setDescription(card.description);
-  }
-
-  embed.addFields((card.fields || []).map((field) => ({
-    name: field.name,
-    value: field.value,
-    inline: Boolean(field.inline),
-  })));
-
-  return embed;
-}
-
 function buildHelpMessagePayload(interaction, page = 'general') {
   const activePage = getHelpPage(page);
   const card = buildHelpCard(interaction, activePage);
-  const attachment = createReadableCardAttachment({
+  const helpCard = {
     ...card,
     footerLeft: getHelpFooterLeft(),
     footerRight: `Requested by ${formatHelpRequester(interaction)}`,
     timestampPlacement: 'footer',
-  }, `help-${activePage}`);
-
-  if (attachment) {
-    return {
-      files: [attachment],
-      embeds: [],
-    };
-  }
+  };
+  const attachment = createReadableCardAttachment(helpCard, `help-${activePage}`) ||
+    createCardAttachment(helpCard, `help-${activePage}`);
 
   return {
-    files: [],
-    embeds: [buildHelpEmbed(interaction, activePage, card)],
+    files: [attachment],
+    embeds: [],
   };
 }
 
