@@ -3,7 +3,9 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const https = require('https');
 const { spawnSync } = require('child_process');
+const { PassThrough, Readable } = require('stream');
 const zlib = require('zlib');
 const {
   ActionRowBuilder,
@@ -77,6 +79,9 @@ const voiceChannelPermissionSnapshots = new Map();
 const setupSessions = new Map();
 let botOwnerIds = new Set();
 let systemFontRendererAvailable = null;
+let pureImageRenderer = null;
+let pureImageRendererAvailable = null;
+let pureImageFontsLoaded = false;
 const cardTheme = {
   accent: [249, 115, 22, 255],
   subtitle: [254, 215, 170, 255],
@@ -3413,6 +3418,386 @@ function renderCardImage(card) {
   }
 }
 
+function getPureImageRenderer() {
+  if (pureImageRendererAvailable === false) {
+    return null;
+  }
+
+  if (pureImageRenderer) {
+    return pureImageRenderer;
+  }
+
+  try {
+    pureImageRenderer = require('pureimage');
+    pureImageRendererAvailable = true;
+    return pureImageRenderer;
+  } catch (error) {
+    console.warn('Pure image card renderer is not available:', error.message || error);
+    pureImageRendererAvailable = false;
+    return null;
+  }
+}
+
+function firstExistingPath(paths) {
+  return paths.find((candidatePath) => candidatePath && fs.existsSync(candidatePath)) || null;
+}
+
+function loadPureImageFonts(pureImage) {
+  if (pureImageFontsLoaded) {
+    return true;
+  }
+
+  const regularFontPath = firstExistingPath([
+    path.join(process.env.WINDIR || 'C:\\Windows', 'Fonts', 'segoeui.ttf'),
+    path.join(process.env.WINDIR || 'C:\\Windows', 'Fonts', 'arial.ttf'),
+    '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+    '/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf',
+  ]);
+  const boldFontPath = firstExistingPath([
+    path.join(process.env.WINDIR || 'C:\\Windows', 'Fonts', 'segoeuib.ttf'),
+    path.join(process.env.WINDIR || 'C:\\Windows', 'Fonts', 'arialbd.ttf'),
+    '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+    '/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf',
+    regularFontPath,
+  ]);
+
+  if (!regularFontPath || !boldFontPath) {
+    console.warn('Readable image card renderer could not find a usable system font.');
+    return false;
+  }
+
+  try {
+    pureImage.registerFont(regularFontPath, 'CardRegular').loadSync();
+    pureImage.registerFont(boldFontPath, 'CardBold').loadSync();
+    pureImageFontsLoaded = true;
+    return true;
+  } catch (error) {
+    console.warn('Readable image card renderer could not load system fonts:', error);
+    return false;
+  }
+}
+
+function cardText(value) {
+  return String(value ?? '')
+    .replace(/<@!?(\d+)>/g, '@User')
+    .replace(/<@&(\d+)>/g, '@Role')
+    .replace(/<#(\d+)>/g, '#Channel')
+    .replace(/[\r\t]+/g, ' ')
+    .replace(/[^\x20-\x7e\n]/g, '?')
+    .trim();
+}
+
+function setCanvasFont(context, family, size) {
+  context.font = `${size}pt ${family}`;
+}
+
+function measureCanvasText(context, text, family, size) {
+  setCanvasFont(context, family, size);
+  return context.measureText(text).width || 0;
+}
+
+function wrapCanvasText(context, value, family, size, maxWidth) {
+  const text = cardText(value);
+  if (!text) {
+    return [''];
+  }
+
+  const lines = [];
+  for (const paragraph of text.split('\n')) {
+    const words = paragraph.split(/\s+/).filter(Boolean);
+    let currentLine = '';
+
+    for (const word of words) {
+      const nextLine = currentLine ? `${currentLine} ${word}` : word;
+      if (measureCanvasText(context, nextLine, family, size) <= maxWidth) {
+        currentLine = nextLine;
+        continue;
+      }
+
+      if (currentLine) {
+        lines.push(currentLine);
+        currentLine = '';
+      }
+
+      if (measureCanvasText(context, word, family, size) <= maxWidth) {
+        currentLine = word;
+        continue;
+      }
+
+      let fragment = '';
+      for (const character of word) {
+        const nextFragment = `${fragment}${character}`;
+        if (measureCanvasText(context, nextFragment, family, size) <= maxWidth) {
+          fragment = nextFragment;
+        } else {
+          if (fragment) {
+            lines.push(fragment);
+          }
+          fragment = character;
+        }
+      }
+      currentLine = fragment;
+    }
+
+    if (currentLine) {
+      lines.push(currentLine);
+    }
+  }
+
+  return lines.length > 0 ? lines : [''];
+}
+
+function fillCanvasRoundedRect(context, x, y, width, height, radius, fillStyle) {
+  const roundedRadius = Math.max(0, Math.min(radius, Math.floor(Math.min(width, height) / 2)));
+  context.fillStyle = fillStyle;
+  context.beginPath();
+  context.moveTo(x + roundedRadius, y);
+  context.lineTo(x + width - roundedRadius, y);
+  context.quadraticCurveTo(x + width, y, x + width, y + roundedRadius);
+  context.lineTo(x + width, y + height - roundedRadius);
+  context.quadraticCurveTo(x + width, y + height, x + width - roundedRadius, y + height);
+  context.lineTo(x + roundedRadius, y + height);
+  context.quadraticCurveTo(x, y + height, x, y + height - roundedRadius);
+  context.lineTo(x, y + roundedRadius);
+  context.quadraticCurveTo(x, y, x + roundedRadius, y);
+  context.closePath();
+  context.fill();
+}
+
+function drawCanvasLines(context, lines, x, y, family, size, lineHeight, fillStyle, maxLines = null) {
+  setCanvasFont(context, family, size);
+  context.fillStyle = fillStyle;
+  const visibleLines = Number.isInteger(maxLines) ? lines.slice(0, maxLines) : lines;
+  for (let index = 0; index < visibleLines.length; index += 1) {
+    const line = index === visibleLines.length - 1 && maxLines && lines.length > maxLines
+      ? `${visibleLines[index].slice(0, Math.max(0, visibleLines[index].length - 3))}...`
+      : visibleLines[index];
+    context.fillText(line, x, y + (index * lineHeight));
+  }
+}
+
+function normalizeCssColor(color, fallback = cardTheme.accent) {
+  const normalized = normalizeImageColor(color, fallback);
+  return `rgb(${normalized[0]}, ${normalized[1]}, ${normalized[2]})`;
+}
+
+function fetchUrlBuffer(url, redirectCount = 0) {
+  return new Promise((resolve, reject) => {
+    if (!url || redirectCount > 3) {
+      reject(new Error('Invalid image URL'));
+      return;
+    }
+
+    const request = https.get(url, {
+      timeout: 4000,
+      headers: { 'User-Agent': 'Voice Bot image renderer' },
+    }, (response) => {
+      if ([301, 302, 303, 307, 308].includes(response.statusCode) && response.headers.location) {
+        response.resume();
+        fetchUrlBuffer(new URL(response.headers.location, url).toString(), redirectCount + 1)
+          .then(resolve)
+          .catch(reject);
+        return;
+      }
+
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        response.resume();
+        reject(new Error(`Image request failed with status ${response.statusCode}`));
+        return;
+      }
+
+      const chunks = [];
+      response.on('data', (chunk) => chunks.push(chunk));
+      response.on('end', () => resolve(Buffer.concat(chunks)));
+    });
+
+    request.on('timeout', () => request.destroy(new Error('Image request timed out')));
+    request.on('error', reject);
+  });
+}
+
+async function loadPureImageAvatar(pureImage, avatarUrl) {
+  if (!avatarUrl) {
+    return null;
+  }
+
+  try {
+    const avatarBuffer = await fetchUrlBuffer(avatarUrl);
+    const stream = Readable.from(avatarBuffer);
+    const isJpeg = avatarBuffer[0] === 0xff && avatarBuffer[1] === 0xd8;
+    return isJpeg
+      ? await pureImage.decodeJPEGFromStream(stream)
+      : await pureImage.decodePNGFromStream(stream);
+  } catch (error) {
+    console.warn('Could not load bot avatar for image card:', error.message || error);
+    return null;
+  }
+}
+
+function drawPureImageAvatar(context, avatarImage, x, y, size, accentColor) {
+  context.fillStyle = accentColor;
+  context.beginPath();
+  context.arc(x + size / 2, y + size / 2, size / 2, 0, Math.PI * 2);
+  context.fill();
+
+  if (!avatarImage) {
+    return false;
+  }
+
+  context.save();
+  context.beginPath();
+  context.arc(x + size / 2, y + size / 2, size / 2 - 3, 0, Math.PI * 2);
+  context.clip();
+  context.drawImage(avatarImage, x, y, size, size);
+  context.restore();
+  return true;
+}
+
+async function encodePureImagePng(pureImage, image) {
+  return new Promise((resolve, reject) => {
+    const outputStream = new PassThrough();
+    const chunks = [];
+    outputStream.on('data', (chunk) => chunks.push(chunk));
+    outputStream.on('end', () => resolve(Buffer.concat(chunks)));
+    outputStream.on('error', reject);
+    pureImage.encodePNGToStream(image, outputStream).catch(reject);
+  });
+}
+
+async function renderPureImageHelpCard(card) {
+  const pureImage = getPureImageRenderer();
+  if (!pureImage || !loadPureImageFonts(pureImage)) {
+    return null;
+  }
+
+  const width = 1500;
+  const padding = 60;
+  const contentWidth = width - padding * 2;
+  const accentColor = normalizeCssColor(card.color || cardTheme.accent);
+  const colors = {
+    background: 'rgb(17, 24, 39)',
+    panel: 'rgb(31, 41, 55)',
+    panelSoft: 'rgb(30, 41, 59)',
+    text: 'rgb(248, 250, 252)',
+    muted: 'rgb(148, 163, 184)',
+    label: 'rgb(253, 186, 116)',
+    subtitle: 'rgb(254, 215, 170)',
+  };
+  const fonts = {
+    title: { family: 'CardBold', size: 44, lineHeight: 54 },
+    subtitle: { family: 'CardRegular', size: 32, lineHeight: 40 },
+    label: { family: 'CardBold', size: 24, lineHeight: 32 },
+    body: { family: 'CardRegular', size: 34, lineHeight: 44 },
+    footer: { family: 'CardRegular', size: 24, lineHeight: 32 },
+    badge: { family: 'CardBold', size: 38, lineHeight: 48 },
+  };
+
+  const measureImage = pureImage.make(1, 1);
+  const measureContext = measureImage.getContext('2d');
+  const descriptionLines = card.description
+    ? wrapCanvasText(measureContext, card.description, fonts.body.family, fonts.body.size, contentWidth - 56)
+    : [];
+  const rows = (card.fields || []).map((field) => {
+    const labelLines = wrapCanvasText(measureContext, field.name, fonts.label.family, fonts.label.size, contentWidth - 56);
+    const valueLines = wrapCanvasText(measureContext, field.value, fonts.body.family, fonts.body.size, contentWidth - 56);
+    const height = 34 + (labelLines.length * fonts.label.lineHeight) + 14 + (valueLines.length * fonts.body.lineHeight) + 22;
+    return { labelLines, valueLines, height };
+  });
+  const descriptionHeight = descriptionLines.length > 0
+    ? 32 + (descriptionLines.length * fonts.body.lineHeight)
+    : 0;
+  const rowsHeight = rows.reduce((total, row) => total + row.height + 22, 0);
+  const footerHeight = 76;
+  const height = Math.max(520, 214 + descriptionHeight + rowsHeight + footerHeight + padding);
+  const image = pureImage.make(width, height);
+  const context = image.getContext('2d');
+
+  context.fillStyle = colors.background;
+  context.fillRect(0, 0, width, height);
+  context.fillStyle = accentColor;
+  context.fillRect(0, 0, width, 18);
+
+  const avatarImage = await loadPureImageAvatar(pureImage, getBotAvatarUrl());
+  const drewAvatar = drawPureImageAvatar(context, avatarImage, padding, 58, 116, accentColor);
+  if (!drewAvatar) {
+    setCanvasFont(context, fonts.badge.family, fonts.badge.size);
+    context.fillStyle = colors.text;
+    context.fillText(card.badge || 'BOT', padding + 24, 126);
+  }
+
+  drawCanvasLines(
+    context,
+    wrapCanvasText(measureContext, card.title || 'Voice Room Bot', fonts.title.family, fonts.title.size, contentWidth - 145),
+    padding + 145,
+    98,
+    fonts.title.family,
+    fonts.title.size,
+    fonts.title.lineHeight,
+    colors.text,
+    1
+  );
+
+  if (card.subtitle) {
+    drawCanvasLines(
+      context,
+      wrapCanvasText(measureContext, card.subtitle, fonts.subtitle.family, fonts.subtitle.size, contentWidth - 145),
+      padding + 145,
+      150,
+      fonts.subtitle.family,
+      fonts.subtitle.size,
+      fonts.subtitle.lineHeight,
+      colors.subtitle,
+      1
+    );
+  }
+
+  let cursorY = 206;
+  if (descriptionLines.length > 0) {
+    fillCanvasRoundedRect(context, padding, cursorY, contentWidth, descriptionHeight, 18, colors.panelSoft);
+    drawCanvasLines(context, descriptionLines, padding + 28, cursorY + 52, fonts.body.family, fonts.body.size, fonts.body.lineHeight, colors.text);
+    cursorY += descriptionHeight + 24;
+  }
+
+  for (const row of rows) {
+    fillCanvasRoundedRect(context, padding, cursorY, contentWidth, row.height, 18, colors.panel);
+    context.fillStyle = accentColor;
+    context.fillRect(padding, cursorY + 8, 10, row.height - 16);
+    drawCanvasLines(context, row.labelLines, padding + 28, cursorY + 46, fonts.label.family, fonts.label.size, fonts.label.lineHeight, colors.label);
+    const valueY = cursorY + 46 + (row.labelLines.length * fonts.label.lineHeight) + 22;
+    drawCanvasLines(context, row.valueLines, padding + 28, valueY, fonts.body.family, fonts.body.size, fonts.body.lineHeight, colors.text);
+    cursorY += row.height + 22;
+  }
+
+  const footerY = height - 34;
+  const footerLeft = card.footerLeft || card.footer || new Date().toLocaleString('en-GB');
+  const footerRight = card.footerRight || null;
+  setCanvasFont(context, fonts.footer.family, fonts.footer.size);
+  context.fillStyle = colors.muted;
+  if (footerLeft) {
+    context.fillText(cardText(footerLeft), padding, footerY);
+  }
+
+  if (footerRight) {
+    const footerRightText = cardText(footerRight);
+    const footerRightWidth = measureCanvasText(context, footerRightText, fonts.footer.family, fonts.footer.size);
+    context.fillText(footerRightText, width - padding - footerRightWidth, footerY);
+  }
+
+  return encodePureImagePng(pureImage, image);
+}
+
+async function createPureImageHelpAttachment(card, slug = 'help') {
+  const image = await renderPureImageHelpCard(card);
+  if (!image) {
+    return null;
+  }
+
+  const safeSlug = slug.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'help';
+  return new AttachmentBuilder(image, {
+    name: `${safeSlug}-${Date.now()}.png`,
+  });
+}
+
 function createCardAttachment(card, slug = 'voice-room-bot') {
   const safeSlug = slug.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'voice-room-bot';
   return new AttachmentBuilder(renderCardImage(card) || createBotCardImage(card), {
@@ -3995,7 +4380,7 @@ function getHelpFooterLeft() {
   return new Date().toLocaleString('en-GB');
 }
 
-function buildHelpMessagePayload(interaction, page = 'general') {
+async function buildHelpMessagePayload(interaction, page = 'general') {
   const activePage = getHelpPage(page);
   const card = buildHelpCard(interaction, activePage);
   const helpCard = {
@@ -4005,6 +4390,7 @@ function buildHelpMessagePayload(interaction, page = 'general') {
     timestampPlacement: 'footer',
   };
   const attachment = createReadableCardAttachment(helpCard, `help-${activePage}`) ||
+    await createPureImageHelpAttachment(helpCard, `help-${activePage}`) ||
     createCardAttachment(helpCard, `help-${activePage}`);
 
   return {
@@ -4020,7 +4406,7 @@ async function handleHelpCommand(interaction) {
   }
 
   await interaction.deferReply();
-  const helpPayload = buildHelpMessagePayload(interaction, 'general');
+  const helpPayload = await buildHelpMessagePayload(interaction, 'general');
   await interaction.editReply({
     ...helpPayload,
     components: [buildHelpMenu(interaction.user.id, 'general')],
@@ -4048,7 +4434,7 @@ async function handleHelpPageSelect(interaction) {
 
   const page = getHelpPage(interaction.values[0]);
   await interaction.deferUpdate();
-  const helpPayload = buildHelpMessagePayload(interaction, page);
+  const helpPayload = await buildHelpMessagePayload(interaction, page);
   await interaction.editReply({
     attachments: [],
     ...helpPayload,
