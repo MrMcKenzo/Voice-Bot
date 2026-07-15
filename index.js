@@ -79,6 +79,7 @@ const voiceChannelPermissionSnapshots = new Map();
 const setupSessions = new Map();
 let botOwnerIds = new Set();
 let systemFontRendererAvailable = null;
+let readableCardRendererAvailable = null;
 let pureImageRenderer = null;
 let pureImageRendererAvailable = null;
 let pureImageFontsLoaded = false;
@@ -3369,6 +3370,14 @@ function getBotAvatarUrl() {
   return client.user?.displayAvatarURL({ extension: 'png', size: 128 }) || null;
 }
 
+function prepareReadableCard(card) {
+  return {
+    ...card,
+    timestampPlacement: card.timestampPlacement || 'footer',
+    avatarUrl: card.avatarUrl || getBotAvatarUrl(),
+  };
+}
+
 function renderCardImage(card) {
   const rendererPath = path.join(__dirname, 'render-card.ps1');
   if (systemFontRendererAvailable === false || !fs.existsSync(rendererPath)) {
@@ -3380,11 +3389,7 @@ function renderCardImage(card) {
   const outputPath = path.join(tempDirectory, 'card.png');
 
   try {
-    const cardWithAvatar = {
-      ...card,
-      avatarUrl: card.avatarUrl || getBotAvatarUrl(),
-    };
-    fs.writeFileSync(inputPath, JSON.stringify(cardWithAvatar), 'utf8');
+    fs.writeFileSync(inputPath, JSON.stringify(prepareReadableCard(card)), 'utf8');
     const result = spawnSync(findPowerShellExecutable(), [
       '-NoProfile',
       '-ExecutionPolicy',
@@ -3412,6 +3417,47 @@ function renderCardImage(card) {
   } catch (error) {
     console.warn('System font card renderer failed:', error);
     systemFontRendererAvailable = false;
+    return null;
+  } finally {
+    fs.rmSync(tempDirectory, { recursive: true, force: true });
+  }
+}
+
+function renderReadableCardImage(card) {
+  const rendererPath = path.join(__dirname, 'render-readable-card.js');
+  if (readableCardRendererAvailable === false || !fs.existsSync(rendererPath)) {
+    return null;
+  }
+
+  const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-bot-readable-card-'));
+  const inputPath = path.join(tempDirectory, 'card.json');
+  const outputPath = path.join(tempDirectory, 'card.png');
+
+  try {
+    fs.writeFileSync(inputPath, JSON.stringify(prepareReadableCard(card)), 'utf8');
+    const result = spawnSync(process.execPath, [
+      rendererPath,
+      inputPath,
+      outputPath,
+    ], {
+      encoding: 'utf8',
+      timeout: 12000,
+      windowsHide: true,
+    });
+
+    if (result.status !== 0 || !fs.existsSync(outputPath)) {
+      if (result.stderr) {
+        console.warn('Readable card renderer failed:', result.stderr.trim());
+      }
+      readableCardRendererAvailable = false;
+      return null;
+    }
+
+    readableCardRendererAvailable = true;
+    return fs.readFileSync(outputPath);
+  } catch (error) {
+    console.warn('Readable card renderer failed:', error);
+    readableCardRendererAvailable = false;
     return null;
   } finally {
     fs.rmSync(tempDirectory, { recursive: true, force: true });
@@ -3800,7 +3846,7 @@ async function createPureImageHelpAttachment(card, slug = 'help') {
 
 function createCardAttachment(card, slug = 'voice-room-bot') {
   const safeSlug = slug.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'voice-room-bot';
-  return new AttachmentBuilder(renderCardImage(card) || createBotCardImage(card), {
+  return new AttachmentBuilder(renderCardImage(card) || renderReadableCardImage(card) || createBotCardImage(prepareReadableCard(card)), {
     name: `${safeSlug}-${Date.now()}.png`,
   });
 }
@@ -3894,10 +3940,7 @@ async function sendModeratorAuditLog(guild, auditEntry) {
     fields: fields.slice(0, 10),
     footer: `Moderator ID: ${moderator.id}`,
   };
-  const auditImage = renderCardImage(auditCard) || createModeratorAuditImage(auditEntry, fields.slice(0, 10));
-  const attachment = new AttachmentBuilder(auditImage, {
-    name: `moderator-audit-${Date.now()}.png`,
-  });
+  const attachment = createCardAttachment(auditCard, 'moderator-audit');
 
   await logChannel.send({ files: [attachment] }).catch((error) => {
     console.warn(`Could not send moderator audit image in ${guild.name}:`, error);
