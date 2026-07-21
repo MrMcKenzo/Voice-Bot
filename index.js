@@ -3651,6 +3651,19 @@ function renderReadableCardImage(card) {
   return renderReadableCardImageWithWorker(card) || renderReadableCardImageDirect(card);
 }
 
+function warmReadableCardWorker() {
+  if (process.platform === 'win32') {
+    return;
+  }
+
+  renderReadableCardImageWithWorker({
+    badge: 'BOT',
+    title: 'Voice Room Bot',
+    description: 'Renderer warmup',
+    timestampPlacement: 'footer',
+  });
+}
+
 function getPureImageRenderer() {
   if (pureImageRendererAvailable === false) {
     return null;
@@ -6372,6 +6385,7 @@ client.once(Events.ClientReady, async () => {
 
   if (process.platform !== 'win32') {
     startReadableCardWorker();
+    warmReadableCardWorker();
   }
 
   await refreshBotOwnerIds();
