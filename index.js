@@ -4,7 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const https = require('https');
-const { spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const { PassThrough, Readable } = require('stream');
 const zlib = require('zlib');
 const {
@@ -80,6 +80,8 @@ const setupSessions = new Map();
 let botOwnerIds = new Set();
 let systemFontRendererAvailable = null;
 let readableCardRendererAvailable = null;
+let readableCardWorker = null;
+let readableCardWorkerQueueDir = null;
 let pureImageRenderer = null;
 let pureImageRendererAvailable = null;
 let pureImageFontsLoaded = false;
@@ -3430,7 +3432,7 @@ function prepareReadableCard(card) {
 
 function renderCardImage(card) {
   const rendererPath = path.join(__dirname, 'render-card.ps1');
-  if (systemFontRendererAvailable === false || !fs.existsSync(rendererPath)) {
+  if (process.platform !== 'win32' || systemFontRendererAvailable === false || !fs.existsSync(rendererPath)) {
     return null;
   }
 
@@ -3473,7 +3475,132 @@ function renderCardImage(card) {
   }
 }
 
-function renderReadableCardImage(card) {
+function getReadableCardWorkerQueueDir() {
+  if (!readableCardWorkerQueueDir) {
+    readableCardWorkerQueueDir = path.join(os.tmpdir(), `voice-bot-readable-card-worker-${process.pid}`);
+  }
+
+  fs.mkdirSync(readableCardWorkerQueueDir, { recursive: true });
+  return readableCardWorkerQueueDir;
+}
+
+function isReadableCardWorkerRunning() {
+  return readableCardWorker && readableCardWorker.exitCode === null && !readableCardWorker.killed;
+}
+
+function startReadableCardWorker() {
+  const rendererPath = path.join(__dirname, 'render-readable-card.js');
+  if (readableCardRendererAvailable === false || !fs.existsSync(rendererPath)) {
+    return false;
+  }
+
+  if (isReadableCardWorkerRunning()) {
+    return true;
+  }
+
+  try {
+    const queueDir = getReadableCardWorkerQueueDir();
+    readableCardWorker = spawn(process.execPath, [
+      rendererPath,
+      '--worker',
+      queueDir,
+    ], {
+      env: {
+        ...process.env,
+        READABLE_CARD_WORKER_PARENT_PID: String(process.pid),
+      },
+      stdio: ['ignore', 'ignore', 'pipe'],
+      windowsHide: true,
+    });
+
+    readableCardWorker.stderr.on('data', (chunk) => {
+      const message = chunk.toString().trim();
+      if (message) {
+        console.warn('Readable card renderer worker:', message);
+      }
+    });
+
+    readableCardWorker.on('exit', (code, signal) => {
+      if (readableCardWorker?.exitCode !== null) {
+        readableCardWorker = null;
+      }
+
+      if (code && code !== 0) {
+        console.warn(`Readable card renderer worker exited with code ${code}${signal ? ` and signal ${signal}` : ''}.`);
+      }
+    });
+
+    readableCardRendererAvailable = true;
+    return true;
+  } catch (error) {
+    console.warn('Readable card renderer worker could not start:', error);
+    readableCardRendererAvailable = false;
+    readableCardWorker = null;
+    return false;
+  }
+}
+
+function waitForReadableCardWorkerOutput(outputPath, errorPath, timeoutMs) {
+  const waitArray = new Int32Array(new SharedArrayBuffer(4));
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (fs.existsSync(outputPath)) {
+      return true;
+    }
+
+    if (fs.existsSync(errorPath)) {
+      throw new Error(fs.readFileSync(errorPath, 'utf8').trim() || 'Readable card renderer worker failed.');
+    }
+
+    if (readableCardWorker && readableCardWorker.exitCode !== null) {
+      return false;
+    }
+
+    Atomics.wait(waitArray, 0, 0, 35);
+  }
+
+  return false;
+}
+
+function renderReadableCardImageWithWorker(card) {
+  if (!startReadableCardWorker()) {
+    return null;
+  }
+
+  const queueDir = getReadableCardWorkerQueueDir();
+  const requestId = `${Date.now()}-${process.pid}-${Math.random().toString(16).slice(2)}`;
+  const requestPath = path.join(queueDir, `${requestId}.json`);
+  const tempRequestPath = `${requestPath}.tmp`;
+  const outputPath = path.join(queueDir, `${requestId}.png`);
+  const errorPath = path.join(queueDir, `${requestId}.err`);
+
+  try {
+    fs.writeFileSync(tempRequestPath, JSON.stringify({
+      card: prepareReadableCard(card),
+      outputPath,
+      errorPath,
+    }), 'utf8');
+    fs.renameSync(tempRequestPath, requestPath);
+
+    if (!waitForReadableCardWorkerOutput(outputPath, errorPath, 9000)) {
+      return null;
+    }
+
+    readableCardRendererAvailable = true;
+    return fs.readFileSync(outputPath);
+  } catch (error) {
+    console.warn('Readable card renderer worker failed:', error.message || error);
+    return null;
+  } finally {
+    fs.rmSync(tempRequestPath, { force: true });
+    fs.rmSync(requestPath, { force: true });
+    fs.rmSync(outputPath, { force: true });
+    fs.rmSync(errorPath, { force: true });
+  }
+}
+
+function renderReadableCardImageDirect(card) {
   const rendererPath = path.join(__dirname, 'render-readable-card.js');
   if (readableCardRendererAvailable === false || !fs.existsSync(rendererPath)) {
     return null;
@@ -3512,6 +3639,10 @@ function renderReadableCardImage(card) {
   } finally {
     fs.rmSync(tempDirectory, { recursive: true, force: true });
   }
+}
+
+function renderReadableCardImage(card) {
+  return renderReadableCardImageWithWorker(card) || renderReadableCardImageDirect(card);
 }
 
 function getPureImageRenderer() {
@@ -6218,6 +6349,10 @@ client.once(Events.ClientReady, async () => {
   console.log(`Logged in as ${client.user.tag}.`);
   if (clientId) {
     console.log(`Invite link: https://discord.com/api/oauth2/authorize?client_id=${clientId}&scope=applications.commands%20bot&permissions=${botPermissionBits.toString()}`);
+  }
+
+  if (process.platform !== 'win32') {
+    startReadableCardWorker();
   }
 
   await refreshBotOwnerIds();

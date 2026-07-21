@@ -5,6 +5,8 @@ const path = require('path');
 const { PassThrough, Readable } = require('stream');
 
 const pureImage = require('pureimage');
+let fontsLoaded = false;
+const avatarCache = new Map();
 
 const COLORS = {
   accent: [249, 115, 22],
@@ -33,6 +35,10 @@ function firstExistingPath(paths) {
 }
 
 function loadFonts() {
+  if (fontsLoaded) {
+    return;
+  }
+
   const windowsDirectory = process.env.WINDIR || 'C:\\Windows';
   const regularFontPath = firstExistingPath([
     path.join(windowsDirectory, 'Fonts', 'segoeui.ttf'),
@@ -54,6 +60,7 @@ function loadFonts() {
 
   pureImage.registerFont(regularFontPath, 'CardRegular').loadSync();
   pureImage.registerFont(boldFontPath, 'CardBold').loadSync();
+  fontsLoaded = true;
 }
 
 function cardText(value) {
@@ -235,13 +242,19 @@ async function loadAvatar(avatarUrl) {
     return null;
   }
 
+  if (avatarCache.has(avatarUrl)) {
+    return avatarCache.get(avatarUrl);
+  }
+
   try {
     const avatarBuffer = await fetchUrlBuffer(avatarUrl);
     const stream = Readable.from(avatarBuffer);
     const isJpeg = avatarBuffer[0] === 0xff && avatarBuffer[1] === 0xd8;
-    return isJpeg
+    const avatarImage = isJpeg
       ? await pureImage.decodeJPEGFromStream(stream)
       : await pureImage.decodePNGFromStream(stream);
+    avatarCache.set(avatarUrl, avatarImage);
+    return avatarImage;
   } catch {
     return null;
   }
@@ -403,8 +416,13 @@ async function renderCard(card) {
 
 async function main() {
   const [, , inputPath, outputPath] = process.argv;
+  if (inputPath === '--worker') {
+    await runWorker(outputPath);
+    return;
+  }
+
   if (!inputPath || !outputPath) {
-    throw new Error('Usage: node render-readable-card.js <input-json> <output-png>');
+    throw new Error('Usage: node render-readable-card.js <input-json> <output-png> or node render-readable-card.js --worker <queue-dir>');
   }
 
   const card = JSON.parse(fs.readFileSync(inputPath, 'utf8').replace(/^\uFEFF/, ''));
@@ -412,6 +430,78 @@ async function main() {
   fs.mkdirSync(outputDirectory, { recursive: true });
   const image = await renderCard(card);
   fs.writeFileSync(outputPath, image);
+}
+
+function readJsonFile(filePath) {
+  return JSON.parse(fs.readFileSync(filePath, 'utf8').replace(/^\uFEFF/, ''));
+}
+
+async function processWorkerRequest(requestPath) {
+  let errorPath = `${requestPath}.err`;
+
+  try {
+    const request = readJsonFile(requestPath);
+    const outputPath = request.outputPath;
+    errorPath = request.errorPath || errorPath;
+
+    if (!request.card || !outputPath) {
+      throw new Error('Worker request is missing card or outputPath.');
+    }
+
+    const image = await renderCard(request.card);
+    const tempOutputPath = `${outputPath}.${process.pid}.tmp`;
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    fs.writeFileSync(tempOutputPath, image);
+    fs.renameSync(tempOutputPath, outputPath);
+  } catch (error) {
+    fs.writeFileSync(errorPath, `${error.stack || error.message || error}${os.EOL}`, 'utf8');
+  } finally {
+    fs.rmSync(requestPath, { force: true });
+  }
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function runWorker(queueDir) {
+  if (!queueDir) {
+    throw new Error('Worker mode requires a queue directory.');
+  }
+
+  loadFonts();
+  fs.mkdirSync(queueDir, { recursive: true });
+  const pending = new Set();
+  const parentPid = Number(process.env.READABLE_CARD_WORKER_PARENT_PID) || null;
+
+  process.on('SIGTERM', () => process.exit(0));
+  process.on('SIGINT', () => process.exit(0));
+
+  while (true) {
+    if (parentPid && process.ppid !== parentPid) {
+      process.exit(0);
+    }
+
+    const requestPaths = fs.readdirSync(queueDir)
+      .filter((fileName) => fileName.endsWith('.json'))
+      .map((fileName) => path.join(queueDir, fileName));
+
+    for (const requestPath of requestPaths) {
+      if (pending.has(requestPath)) {
+        continue;
+      }
+
+      pending.add(requestPath);
+      processWorkerRequest(requestPath)
+        .catch((error) => {
+          const errorPath = `${requestPath}.err`;
+          fs.writeFileSync(errorPath, `${error.stack || error.message || error}${os.EOL}`, 'utf8');
+        })
+        .finally(() => pending.delete(requestPath));
+    }
+
+    await delay(40);
+  }
 }
 
 main().catch((error) => {
