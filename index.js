@@ -4785,27 +4785,39 @@ async function getVoiceLogChannel(guild, channelId) {
   return guild.channels.cache.get(channelId) || await guild.channels.fetch(channelId).catch(() => null);
 }
 
-function formatSingleLogStatus(settings, optionName) {
+async function getLogChannelLabel(guild, channelId) {
+  if (!channelId) {
+    return null;
+  }
+
+  const channel =
+    guild?.channels.cache.get(channelId) ||
+    await guild?.channels.fetch(channelId).catch(() => null);
+
+  return channel?.name ? `#${channel.name}` : `Channel ID ${channelId}`;
+}
+
+async function formatSingleLogStatus(guild, settings, optionName) {
   if (settings.enabled && settings.channelId) {
-    return `Enabled in <#${settings.channelId}>.`;
+    return `Enabled in ${await getLogChannelLabel(guild, settings.channelId)}.`;
   }
 
   if (settings.channelId) {
-    return `Disabled. Saved channel: <#${settings.channelId}>.`;
+    return `Disabled. Saved channel: ${await getLogChannelLabel(guild, settings.channelId)}.`;
   }
 
   return `Not configured. Use /logs ${optionName}:#channel to choose one.`;
 }
 
-function buildLogStatusFields(voiceSettings, moderatorSettings) {
+async function buildLogStatusFields(guild, voiceSettings, moderatorSettings) {
   return [
     {
       name: 'Voice activity',
-      value: formatSingleLogStatus(voiceSettings, 'channel'),
+      value: await formatSingleLogStatus(guild, voiceSettings, 'channel'),
     },
     {
       name: 'Moderator commands',
-      value: formatSingleLogStatus(moderatorSettings, 'moderator-channel'),
+      value: await formatSingleLogStatus(guild, moderatorSettings, 'moderator-channel'),
     },
   ];
 }
@@ -4836,7 +4848,7 @@ async function handleLogsCommand(interaction) {
     await interaction.reply({
       files: [buildStatusCard('Logging', 'Current Discord log channels.', {
         badge: 'LOG',
-        fields: buildLogStatusFields(currentVoiceSettings, currentModeratorSettings),
+        fields: await buildLogStatusFields(interaction.guild, currentVoiceSettings, currentModeratorSettings),
       })],
     });
     return;
@@ -4925,7 +4937,7 @@ async function handleLogsCommand(interaction) {
     files: [buildStatusCard('Logging', 'Logging settings updated.', {
       type: updatedVoiceSettings.enabled || updatedModeratorSettings.enabled ? 'success' : 'warning',
       badge: 'LOG',
-      fields: buildLogStatusFields(updatedVoiceSettings, updatedModeratorSettings),
+      fields: await buildLogStatusFields(interaction.guild, updatedVoiceSettings, updatedModeratorSettings),
     })],
   });
 }
