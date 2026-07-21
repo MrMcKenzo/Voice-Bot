@@ -3572,7 +3572,7 @@ function renderReadableCardImageWithWorker(card) {
   const requestId = `${Date.now()}-${process.pid}-${Math.random().toString(16).slice(2)}`;
   const requestPath = path.join(queueDir, `${requestId}.json`);
   const tempRequestPath = `${requestPath}.tmp`;
-  const outputPath = path.join(queueDir, `${requestId}.jpg`);
+  const outputPath = path.join(queueDir, `${requestId}.png`);
   const errorPath = path.join(queueDir, `${requestId}.err`);
 
   try {
@@ -3590,7 +3590,7 @@ function renderReadableCardImageWithWorker(card) {
     readableCardRendererAvailable = true;
     return {
       image: fs.readFileSync(outputPath),
-      extension: 'jpg',
+      extension: 'png',
     };
   } catch (error) {
     console.warn('Readable card renderer worker failed:', error.message || error);
@@ -3611,7 +3611,7 @@ function renderReadableCardImageDirect(card) {
 
   const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-bot-readable-card-'));
   const inputPath = path.join(tempDirectory, 'card.json');
-  const outputPath = path.join(tempDirectory, 'card.jpg');
+  const outputPath = path.join(tempDirectory, 'card.png');
 
   try {
     fs.writeFileSync(inputPath, JSON.stringify(prepareReadableCard(card)), 'utf8');
@@ -3636,7 +3636,7 @@ function renderReadableCardImageDirect(card) {
     readableCardRendererAvailable = true;
     return {
       image: fs.readFileSync(outputPath),
-      extension: 'jpg',
+      extension: 'png',
     };
   } catch (error) {
     console.warn('Readable card renderer failed:', error);
