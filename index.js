@@ -3572,7 +3572,7 @@ function renderReadableCardImageWithWorker(card) {
   const requestId = `${Date.now()}-${process.pid}-${Math.random().toString(16).slice(2)}`;
   const requestPath = path.join(queueDir, `${requestId}.json`);
   const tempRequestPath = `${requestPath}.tmp`;
-  const outputPath = path.join(queueDir, `${requestId}.png`);
+  const outputPath = path.join(queueDir, `${requestId}.jpg`);
   const errorPath = path.join(queueDir, `${requestId}.err`);
 
   try {
@@ -3588,7 +3588,10 @@ function renderReadableCardImageWithWorker(card) {
     }
 
     readableCardRendererAvailable = true;
-    return fs.readFileSync(outputPath);
+    return {
+      image: fs.readFileSync(outputPath),
+      extension: 'jpg',
+    };
   } catch (error) {
     console.warn('Readable card renderer worker failed:', error.message || error);
     return null;
@@ -3608,7 +3611,7 @@ function renderReadableCardImageDirect(card) {
 
   const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-bot-readable-card-'));
   const inputPath = path.join(tempDirectory, 'card.json');
-  const outputPath = path.join(tempDirectory, 'card.png');
+  const outputPath = path.join(tempDirectory, 'card.jpg');
 
   try {
     fs.writeFileSync(inputPath, JSON.stringify(prepareReadableCard(card)), 'utf8');
@@ -3631,7 +3634,10 @@ function renderReadableCardImageDirect(card) {
     }
 
     readableCardRendererAvailable = true;
-    return fs.readFileSync(outputPath);
+    return {
+      image: fs.readFileSync(outputPath),
+      extension: 'jpg',
+    };
   } catch (error) {
     console.warn('Readable card renderer failed:', error);
     readableCardRendererAvailable = false;
@@ -4027,7 +4033,21 @@ async function createPureImageHelpAttachment(card, slug = 'help') {
 
 function createCardAttachment(card, slug = 'voice-room-bot') {
   const safeSlug = slug.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'voice-room-bot';
-  return new AttachmentBuilder(renderCardImage(card) || renderReadableCardImage(card) || createBotCardImage(prepareReadableCard(card)), {
+  const systemImage = renderCardImage(card);
+  if (systemImage) {
+    return new AttachmentBuilder(systemImage, {
+      name: `${safeSlug}-${Date.now()}.png`,
+    });
+  }
+
+  const readableImage = renderReadableCardImage(card);
+  if (readableImage) {
+    return new AttachmentBuilder(readableImage.image, {
+      name: `${safeSlug}-${Date.now()}.${readableImage.extension}`,
+    });
+  }
+
+  return new AttachmentBuilder(createBotCardImage(prepareReadableCard(card)), {
     name: `${safeSlug}-${Date.now()}.png`,
   });
 }

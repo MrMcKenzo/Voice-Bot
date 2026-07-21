@@ -279,18 +279,28 @@ function drawAvatar(context, avatarImage, x, y, size, accentColor) {
   return true;
 }
 
-async function encodePng(image) {
+async function encodeImage(image, format = 'png') {
   return new Promise((resolve, reject) => {
     const outputStream = new PassThrough();
     const chunks = [];
     outputStream.on('data', (chunk) => chunks.push(chunk));
     outputStream.on('end', () => resolve(Buffer.concat(chunks)));
     outputStream.on('error', reject);
+
+    if (format === 'jpeg' || format === 'jpg') {
+      pureImage.encodeJPEGToStream(image, outputStream, 88).catch(reject);
+      return;
+    }
+
     pureImage.encodePNGToStream(image, outputStream).catch(reject);
   });
 }
 
-async function renderCard(card) {
+function outputFormatFromPath(outputPath) {
+  return /\.jpe?g$/i.test(outputPath || '') ? 'jpeg' : 'png';
+}
+
+async function renderCard(card, format = 'png') {
   loadFonts();
 
   const width = 1125;
@@ -416,7 +426,7 @@ async function renderCard(card) {
     context.fillText(footerText, width - padding - footerWidth, footerY);
   }
 
-  return encodePng(image);
+  return encodeImage(image, format);
 }
 
 async function main() {
@@ -433,7 +443,7 @@ async function main() {
   const card = JSON.parse(fs.readFileSync(inputPath, 'utf8').replace(/^\uFEFF/, ''));
   const outputDirectory = path.dirname(outputPath);
   fs.mkdirSync(outputDirectory, { recursive: true });
-  const image = await renderCard(card);
+  const image = await renderCard(card, outputFormatFromPath(outputPath));
   fs.writeFileSync(outputPath, image);
 }
 
@@ -453,7 +463,7 @@ async function processWorkerRequest(requestPath) {
       throw new Error('Worker request is missing card or outputPath.');
     }
 
-    const image = await renderCard(request.card);
+    const image = await renderCard(request.card, outputFormatFromPath(outputPath));
     const tempOutputPath = `${outputPath}.${process.pid}.tmp`;
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     fs.writeFileSync(tempOutputPath, image);
