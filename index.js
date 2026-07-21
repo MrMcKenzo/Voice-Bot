@@ -4618,7 +4618,6 @@ async function buildHelpMessagePayload(interaction, page = 'general') {
     timestampPlacement: 'footer',
   };
   const attachment = createReadableCardAttachment(helpCard, `help-${activePage}`) ||
-    await createPureImageHelpAttachment(helpCard, `help-${activePage}`) ||
     createCardAttachment(helpCard, `help-${activePage}`);
 
   return {

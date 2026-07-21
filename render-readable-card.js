@@ -21,13 +21,13 @@ const COLORS = {
 };
 
 const FONTS = {
-  title: { family: 'CardBold', size: 44, lineHeight: 54 },
-  subtitle: { family: 'CardRegular', size: 32, lineHeight: 40 },
-  date: { family: 'CardRegular', size: 24, lineHeight: 32 },
-  label: { family: 'CardBold', size: 24, lineHeight: 32 },
-  body: { family: 'CardRegular', size: 34, lineHeight: 44 },
-  footer: { family: 'CardRegular', size: 24, lineHeight: 32 },
-  badge: { family: 'CardBold', size: 38, lineHeight: 48 },
+  title: { family: 'CardBold', size: 33, lineHeight: 41 },
+  subtitle: { family: 'CardRegular', size: 24, lineHeight: 30 },
+  date: { family: 'CardRegular', size: 18, lineHeight: 24 },
+  label: { family: 'CardBold', size: 18, lineHeight: 24 },
+  body: { family: 'CardRegular', size: 26, lineHeight: 33 },
+  footer: { family: 'CardRegular', size: 18, lineHeight: 24 },
+  badge: { family: 'CardBold', size: 29, lineHeight: 36 },
 };
 
 function firstExistingPath(paths) {
@@ -293,9 +293,14 @@ async function encodePng(image) {
 async function renderCard(card) {
   loadFonts();
 
-  const width = 1500;
-  const padding = 60;
+  const width = 1125;
+  const padding = 45;
   const contentWidth = width - padding * 2;
+  const topBarHeight = 14;
+  const avatarTop = 44;
+  const avatarSize = 87;
+  const headerTextOffset = 109;
+  const panelInset = 21;
   const accentColor = colorToCss(card.color);
   const measureImage = pureImage.make(1, 1);
   const measureContext = measureImage.getContext('2d');
@@ -308,12 +313,12 @@ async function renderCard(card) {
       const labelLines = wrapText(measureContext, field.name, FONTS.label.family, FONTS.label.size, contentWidth - 56);
       const valueLines = wrapText(measureContext, field.value, FONTS.body.family, FONTS.body.size, contentWidth - 56);
       const progress = normalizeProgress(field.progress);
-      const height = 34 +
+      const height = 26 +
         (labelLines.length * FONTS.label.lineHeight) +
-        14 +
+        11 +
         (valueLines.length * FONTS.body.lineHeight) +
-        (progress !== null ? 58 : 0) +
-        22;
+        (progress !== null ? 44 : 0) +
+        17;
       return { labelLines, valueLines, progress, height };
     });
 
@@ -323,76 +328,76 @@ async function renderCard(card) {
   const footerLeft = card.footerLeft || card.footer || (timestampInFooter ? timestampText : null);
   const footerRight = card.footerRight || null;
   const descriptionHeight = descriptionLines.length > 0
-    ? 32 + (descriptionLines.length * FONTS.body.lineHeight)
+    ? 24 + (descriptionLines.length * FONTS.body.lineHeight)
     : 0;
-  const rowsHeight = rows.reduce((total, row) => total + row.height + 22, 0);
-  const footerHeight = footerLeft || footerRight ? 76 : 0;
-  const layoutBase = showHeaderTimestamp ? 232 : 206;
-  const height = Math.max(520, layoutBase + descriptionHeight + rowsHeight + footerHeight + padding);
+  const rowsHeight = rows.reduce((total, row) => total + row.height + 17, 0);
+  const footerHeight = footerLeft || footerRight ? 57 : 0;
+  const layoutBase = showHeaderTimestamp ? 174 : 155;
+  const height = Math.max(390, layoutBase + descriptionHeight + rowsHeight + footerHeight + padding);
   const image = pureImage.make(width, height);
   const context = image.getContext('2d');
 
   context.fillStyle = COLORS.background;
   context.fillRect(0, 0, width, height);
   context.fillStyle = accentColor;
-  context.fillRect(0, 0, width, 18);
+  context.fillRect(0, 0, width, topBarHeight);
 
   const avatarImage = await loadAvatar(card.avatarUrl);
-  const drewAvatar = drawAvatar(context, avatarImage, padding, 58, 116, accentColor);
+  const drewAvatar = drawAvatar(context, avatarImage, padding, avatarTop, avatarSize, accentColor);
   if (!drewAvatar) {
     const badge = (cardText(card.badge) || 'BOT').slice(0, 3).toUpperCase();
     setFont(context, FONTS.badge.family, FONTS.badge.size);
     context.fillStyle = COLORS.text;
-    context.fillText(badge, padding + 24, 126);
+    context.fillText(badge, padding + 18, 95);
   }
 
   setFont(context, FONTS.title.family, FONTS.title.size);
   context.fillStyle = COLORS.text;
   context.fillText(
-    truncateToWidth(measureContext, card.title || 'Voice Room Bot', FONTS.title.family, FONTS.title.size, contentWidth - 145),
-    padding + 145,
-    98
+    truncateToWidth(measureContext, card.title || 'Voice Room Bot', FONTS.title.family, FONTS.title.size, contentWidth - headerTextOffset),
+    padding + headerTextOffset,
+    74
   );
 
   if (card.subtitle) {
     setFont(context, FONTS.subtitle.family, FONTS.subtitle.size);
     context.fillStyle = COLORS.subtitle;
     context.fillText(
-      truncateToWidth(measureContext, card.subtitle, FONTS.subtitle.family, FONTS.subtitle.size, contentWidth - 145),
-      padding + 145,
-      150
+      truncateToWidth(measureContext, card.subtitle, FONTS.subtitle.family, FONTS.subtitle.size, contentWidth - headerTextOffset),
+      padding + headerTextOffset,
+      113
     );
   }
 
   if (showHeaderTimestamp) {
     setFont(context, FONTS.date.family, FONTS.date.size);
     context.fillStyle = COLORS.muted;
-    context.fillText(timestampText, padding + 145, 190);
+    context.fillText(timestampText, padding + headerTextOffset, 143);
   }
 
-  let cursorY = showHeaderTimestamp ? 232 : 206;
+  let cursorY = showHeaderTimestamp ? 174 : 155;
   if (descriptionLines.length > 0) {
-    fillRoundedRect(context, padding, cursorY, contentWidth, descriptionHeight, 18, COLORS.panelSoft);
-    drawLines(context, descriptionLines, padding + 28, cursorY + 52, FONTS.body.family, FONTS.body.size, FONTS.body.lineHeight, COLORS.text);
-    cursorY += descriptionHeight + 24;
+    fillRoundedRect(context, padding, cursorY, contentWidth, descriptionHeight, 14, COLORS.panelSoft);
+    drawLines(context, descriptionLines, padding + panelInset, cursorY + 39, FONTS.body.family, FONTS.body.size, FONTS.body.lineHeight, COLORS.text);
+    cursorY += descriptionHeight + 18;
   }
 
   for (const row of rows) {
-    fillRoundedRect(context, padding, cursorY, contentWidth, row.height, 18, COLORS.panel);
+    fillRoundedRect(context, padding, cursorY, contentWidth, row.height, 14, COLORS.panel);
     context.fillStyle = accentColor;
-    context.fillRect(padding, cursorY + 8, 10, row.height - 16);
-    drawLines(context, row.labelLines, padding + 28, cursorY + 46, FONTS.label.family, FONTS.label.size, FONTS.label.lineHeight, COLORS.label);
-    const valueY = cursorY + 46 + (row.labelLines.length * FONTS.label.lineHeight) + 22;
-    const textBottom = drawLines(context, row.valueLines, padding + 28, valueY, FONTS.body.family, FONTS.body.size, FONTS.body.lineHeight, COLORS.text);
+    context.fillRect(padding, cursorY + 6, 8, row.height - 12);
+    drawLines(context, row.labelLines, padding + panelInset, cursorY + 35, FONTS.label.family, FONTS.label.size, FONTS.label.lineHeight, COLORS.label);
+    const valueY = cursorY + 35 + (row.labelLines.length * FONTS.label.lineHeight) + 17;
+    const textBottom = drawLines(context, row.valueLines, padding + panelInset, valueY, FONTS.body.family, FONTS.body.size, FONTS.body.lineHeight, COLORS.text);
 
     if (row.progress !== null) {
-      drawProgressBar(context, padding + 28, textBottom + 12, contentWidth - 56, 32, row.progress, accentColor);
+      drawProgressBar(context, padding + panelInset, textBottom + 9, contentWidth - (panelInset * 2), 24, row.progress, accentColor);
     }
 
-    cursorY += row.height + 22;
+    cursorY += row.height + 17;
   }
 
-  const footerY = height - 34;
+  const footerY = height - 26;
   if (footerLeft) {
     setFont(context, FONTS.footer.family, FONTS.footer.size);
     context.fillStyle = COLORS.muted;
