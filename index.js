@@ -6128,7 +6128,14 @@ function isUnknownInteractionError(error) {
 
 async function respondToInteractionError(interaction, message) {
   try {
-    if (interaction.deferred || interaction.replied) {
+    if (interaction.deferred && !interaction.replied) {
+      await interaction.editReply({
+        files: [buildStatusCard('Bot Error', message, { type: 'error', badge: 'ERR' })],
+      });
+      return;
+    }
+
+    if (interaction.replied) {
       await interaction.followUp({
         files: [buildStatusCard('Bot Error', message, { type: 'error', badge: 'ERR' })],
         ephemeral: true,
@@ -6145,6 +6152,36 @@ async function respondToInteractionError(interaction, message) {
       console.error('Failed to send interaction error response:', responseError);
     }
   }
+}
+
+async function prepareChatInputInteraction(interaction) {
+  if (interaction.deferred || interaction.replied) {
+    return;
+  }
+
+  const originalReply = interaction.reply.bind(interaction);
+  const originalDeferReply = interaction.deferReply.bind(interaction);
+
+  interaction.reply = async (options = {}) => {
+    if (!interaction.deferred && !interaction.replied) {
+      return originalReply(options);
+    }
+
+    const editOptions = typeof options === 'string' ? { content: options } : { ...options };
+    delete editOptions.ephemeral;
+    delete editOptions.fetchReply;
+    return interaction.editReply(editOptions);
+  };
+
+  interaction.deferReply = async (options = {}) => {
+    if (interaction.deferred || interaction.replied) {
+      return null;
+    }
+
+    return originalDeferReply(options);
+  };
+
+  await interaction.deferReply();
 }
 
 async function handleInteractionError(interaction, error) {
@@ -6236,6 +6273,8 @@ client.on('interactionCreate', async (interaction) => {
   }
 
   if (interaction.isChatInputCommand()) {
+    await prepareChatInputInteraction(interaction);
+
     if (interaction.commandName === 'help') {
       await handleHelpCommand(interaction);
       return;
