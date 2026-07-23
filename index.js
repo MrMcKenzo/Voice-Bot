@@ -2026,6 +2026,49 @@ function findCategoryForSavedChannel(savedChannel, guildId = null) {
   return null;
 }
 
+function permissionBitfieldToBigInt(value) {
+  if (typeof value === 'bigint') {
+    return value;
+  }
+
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? BigInt(Math.max(0, Math.trunc(value))) : 0n;
+  }
+
+  if (typeof value === 'string') {
+    const trimmedValue = value.trim();
+    if (!trimmedValue) {
+      return 0n;
+    }
+
+    try {
+      return BigInt(trimmedValue);
+    } catch {
+      return 0n;
+    }
+  }
+
+  if (value && typeof value === 'object') {
+    if (Object.prototype.hasOwnProperty.call(value, 'bitfield')) {
+      return permissionBitfieldToBigInt(value.bitfield);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(value, 'bits')) {
+      return permissionBitfieldToBigInt(value.bits);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(value, 'value')) {
+      return permissionBitfieldToBigInt(value.value);
+    }
+  }
+
+  return 0n;
+}
+
+function permissionBitfieldToString(value) {
+  return permissionBitfieldToBigInt(value).toString();
+}
+
 function serializePermissionSnapshot(snapshot) {
   if (!Array.isArray(snapshot)) {
     return [];
@@ -2036,8 +2079,8 @@ function serializePermissionSnapshot(snapshot) {
     .map((overwrite) => ({
       id: overwrite.id,
       type: overwrite.type,
-      allow: typeof overwrite.allow === 'bigint' ? overwrite.allow.toString() : String(overwrite.allow || 0),
-      deny: typeof overwrite.deny === 'bigint' ? overwrite.deny.toString() : String(overwrite.deny || 0),
+      allow: permissionBitfieldToString(overwrite.allow),
+      deny: permissionBitfieldToString(overwrite.deny),
     }));
 }
 
@@ -2051,8 +2094,8 @@ function normalizePermissionSnapshot(snapshot) {
     .map((overwrite) => ({
       id: overwrite.id,
       type: overwrite.type,
-      allow: BigInt(overwrite.allow || 0),
-      deny: BigInt(overwrite.deny || 0),
+      allow: permissionBitfieldToBigInt(overwrite.allow),
+      deny: permissionBitfieldToBigInt(overwrite.deny),
     }));
 }
 
@@ -2505,8 +2548,8 @@ function capturePermissionOverwrites(channel) {
   const mapper = (overwrite) => ({
     id: overwrite.id,
     type: overwrite.type,
-    allow: overwrite.allow && overwrite.allow.bitfield ? String(overwrite.allow.bitfield) : String(overwrite.allow || 0),
-    deny: overwrite.deny && overwrite.deny.bitfield ? String(overwrite.deny.bitfield) : String(overwrite.deny || 0),
+    allow: permissionBitfieldToString(overwrite.allow),
+    deny: permissionBitfieldToString(overwrite.deny),
   });
 
   if (typeof cache.map === 'function') {
