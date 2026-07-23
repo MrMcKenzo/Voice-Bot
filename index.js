@@ -6,7 +6,6 @@ const path = require('path');
 const https = require('https');
 const { spawn, spawnSync } = require('child_process');
 const { PassThrough, Readable } = require('stream');
-const zlib = require('zlib');
 const {
   ActionRowBuilder,
   ApplicationCommandOptionType,
@@ -2929,217 +2928,6 @@ async function sendVoiceActivityLog(oldState, newState) {
   });
 }
 
-const pixelFont = {
-  ' ': ['00000', '00000', '00000', '00000', '00000', '00000', '00000'],
-  '!': ['00100', '00100', '00100', '00100', '00100', '00000', '00100'],
-  '"': ['01010', '01010', '01010', '00000', '00000', '00000', '00000'],
-  '#': ['01010', '01010', '11111', '01010', '11111', '01010', '01010'],
-  '%': ['11001', '11010', '00100', '01000', '10110', '00110', '00000'],
-  '&': ['01100', '10010', '10100', '01000', '10101', '10010', '01101'],
-  "'": ['00100', '00100', '01000', '00000', '00000', '00000', '00000'],
-  '(': ['00010', '00100', '01000', '01000', '01000', '00100', '00010'],
-  ')': ['01000', '00100', '00010', '00010', '00010', '00100', '01000'],
-  '*': ['00000', '10101', '01110', '11111', '01110', '10101', '00000'],
-  '+': ['00000', '00100', '00100', '11111', '00100', '00100', '00000'],
-  ',': ['00000', '00000', '00000', '00000', '00100', '00100', '01000'],
-  '-': ['00000', '00000', '00000', '11111', '00000', '00000', '00000'],
-  '.': ['00000', '00000', '00000', '00000', '00000', '01100', '01100'],
-  '/': ['00001', '00010', '00100', '01000', '10000', '00000', '00000'],
-  '0': ['01110', '10001', '10011', '10101', '11001', '10001', '01110'],
-  '1': ['00100', '01100', '00100', '00100', '00100', '00100', '01110'],
-  '2': ['01110', '10001', '00001', '00010', '00100', '01000', '11111'],
-  '3': ['11110', '00001', '00001', '01110', '00001', '00001', '11110'],
-  '4': ['00010', '00110', '01010', '10010', '11111', '00010', '00010'],
-  '5': ['11111', '10000', '10000', '11110', '00001', '00001', '11110'],
-  '6': ['00110', '01000', '10000', '11110', '10001', '10001', '01110'],
-  '7': ['11111', '00001', '00010', '00100', '01000', '01000', '01000'],
-  '8': ['01110', '10001', '10001', '01110', '10001', '10001', '01110'],
-  '9': ['01110', '10001', '10001', '01111', '00001', '00010', '01100'],
-  ':': ['00000', '01100', '01100', '00000', '01100', '01100', '00000'],
-  ';': ['00000', '01100', '01100', '00000', '01100', '00100', '01000'],
-  '<': ['00010', '00100', '01000', '10000', '01000', '00100', '00010'],
-  '=': ['00000', '00000', '11111', '00000', '11111', '00000', '00000'],
-  '>': ['01000', '00100', '00010', '00001', '00010', '00100', '01000'],
-  '?': ['01110', '10001', '00001', '00010', '00100', '00000', '00100'],
-  '@': ['01110', '10001', '10111', '10101', '10111', '10000', '01110'],
-  A: ['01110', '10001', '10001', '11111', '10001', '10001', '10001'],
-  B: ['11110', '10001', '10001', '11110', '10001', '10001', '11110'],
-  C: ['01110', '10001', '10000', '10000', '10000', '10001', '01110'],
-  D: ['11110', '10001', '10001', '10001', '10001', '10001', '11110'],
-  E: ['11111', '10000', '10000', '11110', '10000', '10000', '11111'],
-  F: ['11111', '10000', '10000', '11110', '10000', '10000', '10000'],
-  G: ['01110', '10001', '10000', '10111', '10001', '10001', '01110'],
-  H: ['10001', '10001', '10001', '11111', '10001', '10001', '10001'],
-  I: ['01110', '00100', '00100', '00100', '00100', '00100', '01110'],
-  J: ['00001', '00001', '00001', '00001', '10001', '10001', '01110'],
-  K: ['10001', '10010', '10100', '11000', '10100', '10010', '10001'],
-  L: ['10000', '10000', '10000', '10000', '10000', '10000', '11111'],
-  M: ['10001', '11011', '10101', '10101', '10001', '10001', '10001'],
-  N: ['10001', '11001', '10101', '10011', '10001', '10001', '10001'],
-  O: ['01110', '10001', '10001', '10001', '10001', '10001', '01110'],
-  P: ['11110', '10001', '10001', '11110', '10000', '10000', '10000'],
-  Q: ['01110', '10001', '10001', '10001', '10101', '10010', '01101'],
-  R: ['11110', '10001', '10001', '11110', '10100', '10010', '10001'],
-  S: ['01111', '10000', '10000', '01110', '00001', '00001', '11110'],
-  T: ['11111', '00100', '00100', '00100', '00100', '00100', '00100'],
-  U: ['10001', '10001', '10001', '10001', '10001', '10001', '01110'],
-  V: ['10001', '10001', '10001', '10001', '10001', '01010', '00100'],
-  W: ['10001', '10001', '10001', '10101', '10101', '10101', '01010'],
-  X: ['10001', '10001', '01010', '00100', '01010', '10001', '10001'],
-  Y: ['10001', '10001', '01010', '00100', '00100', '00100', '00100'],
-  Z: ['11111', '00001', '00010', '00100', '01000', '10000', '11111'],
-  '[': ['01110', '01000', '01000', '01000', '01000', '01000', '01110'],
-  '\\': ['10000', '01000', '00100', '00010', '00001', '00000', '00000'],
-  ']': ['01110', '00010', '00010', '00010', '00010', '00010', '01110'],
-  '`': ['01000', '00100', '00000', '00000', '00000', '00000', '00000'],
-  '_': ['00000', '00000', '00000', '00000', '00000', '00000', '11111'],
-  a: ['00000', '00000', '01110', '00001', '01111', '10001', '01111'],
-  b: ['10000', '10000', '10110', '11001', '10001', '10001', '11110'],
-  c: ['00000', '00000', '01110', '10001', '10000', '10001', '01110'],
-  d: ['00001', '00001', '01101', '10011', '10001', '10001', '01111'],
-  e: ['00000', '00000', '01110', '10001', '11111', '10000', '01110'],
-  f: ['00110', '01001', '01000', '11100', '01000', '01000', '01000'],
-  g: ['00000', '00000', '01111', '10001', '01111', '00001', '01110'],
-  h: ['10000', '10000', '10110', '11001', '10001', '10001', '10001'],
-  i: ['00100', '00000', '01100', '00100', '00100', '00100', '01110'],
-  j: ['00010', '00000', '00110', '00010', '00010', '10010', '01100'],
-  k: ['10000', '10000', '10010', '10100', '11000', '10100', '10010'],
-  l: ['01100', '00100', '00100', '00100', '00100', '00100', '01110'],
-  m: ['00000', '00000', '11010', '10101', '10101', '10101', '10101'],
-  n: ['00000', '00000', '10110', '11001', '10001', '10001', '10001'],
-  o: ['00000', '00000', '01110', '10001', '10001', '10001', '01110'],
-  p: ['00000', '00000', '11110', '10001', '11110', '10000', '10000'],
-  q: ['00000', '00000', '01111', '10001', '01111', '00001', '00001'],
-  r: ['00000', '00000', '10110', '11001', '10000', '10000', '10000'],
-  s: ['00000', '00000', '01111', '10000', '01110', '00001', '11110'],
-  t: ['01000', '01000', '11100', '01000', '01000', '01001', '00110'],
-  u: ['00000', '00000', '10001', '10001', '10001', '10011', '01101'],
-  v: ['00000', '00000', '10001', '10001', '10001', '01010', '00100'],
-  w: ['00000', '00000', '10001', '10001', '10101', '10101', '01010'],
-  x: ['00000', '00000', '10001', '01010', '00100', '01010', '10001'],
-  y: ['00000', '00000', '10001', '10001', '01111', '00001', '01110'],
-  z: ['00000', '00000', '11111', '00010', '00100', '01000', '11111'],
-};
-
-const pngCrcTable = Array.from({ length: 256 }, (_, index) => {
-  let value = index;
-  for (let bit = 0; bit < 8; bit += 1) {
-    value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
-  }
-  return value >>> 0;
-});
-
-function pngCrc32(buffer) {
-  let crc = 0xffffffff;
-  for (const byte of buffer) {
-    crc = pngCrcTable[(crc ^ byte) & 0xff] ^ (crc >>> 8);
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
-function createPngChunk(type, data = Buffer.alloc(0)) {
-  const typeBuffer = Buffer.from(type, 'ascii');
-  const lengthBuffer = Buffer.alloc(4);
-  const crcBuffer = Buffer.alloc(4);
-  lengthBuffer.writeUInt32BE(data.length, 0);
-  crcBuffer.writeUInt32BE(pngCrc32(Buffer.concat([typeBuffer, data])), 0);
-  return Buffer.concat([lengthBuffer, typeBuffer, data, crcBuffer]);
-}
-
-function encodePng(width, height, pixels) {
-  const header = Buffer.alloc(13);
-  header.writeUInt32BE(width, 0);
-  header.writeUInt32BE(height, 4);
-  header[8] = 8;
-  header[9] = 6;
-
-  const scanlines = Buffer.alloc((width * 4 + 1) * height);
-  for (let y = 0; y < height; y += 1) {
-    const scanlineStart = y * (width * 4 + 1);
-    scanlines[scanlineStart] = 0;
-    pixels.copy(scanlines, scanlineStart + 1, y * width * 4, (y + 1) * width * 4);
-  }
-
-  return Buffer.concat([
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    createPngChunk('IHDR', header),
-    createPngChunk('IDAT', zlib.deflateSync(scanlines)),
-    createPngChunk('IEND'),
-  ]);
-}
-
-function setImagePixel(pixels, width, height, x, y, color) {
-  if (x < 0 || y < 0 || x >= width || y >= height) {
-    return;
-  }
-
-  const offset = (y * width + x) * 4;
-  pixels[offset] = color[0];
-  pixels[offset + 1] = color[1];
-  pixels[offset + 2] = color[2];
-  pixels[offset + 3] = color[3] ?? 255;
-}
-
-function drawImageRect(pixels, width, height, x, y, rectWidth, rectHeight, color) {
-  for (let row = Math.max(0, y); row < Math.min(height, y + rectHeight); row += 1) {
-    for (let column = Math.max(0, x); column < Math.min(width, x + rectWidth); column += 1) {
-      setImagePixel(pixels, width, height, column, row, color);
-    }
-  }
-}
-
-function isInRoundedRect(column, row, x, y, rectWidth, rectHeight, radius) {
-  const roundedRadius = Math.max(0, Math.min(radius, Math.floor(Math.min(rectWidth, rectHeight) / 2)));
-  if (roundedRadius === 0) {
-    return true;
-  }
-
-  const left = x;
-  const right = x + rectWidth - 1;
-  const top = y;
-  const bottom = y + rectHeight - 1;
-  let centerX = column;
-  let centerY = row;
-
-  if (column < left + roundedRadius) {
-    centerX = left + roundedRadius;
-  } else if (column > right - roundedRadius) {
-    centerX = right - roundedRadius;
-  }
-
-  if (row < top + roundedRadius) {
-    centerY = top + roundedRadius;
-  } else if (row > bottom - roundedRadius) {
-    centerY = bottom - roundedRadius;
-  }
-
-  const deltaX = column - centerX;
-  const deltaY = row - centerY;
-  return deltaX * deltaX + deltaY * deltaY <= roundedRadius * roundedRadius;
-}
-
-function drawImageRoundedRect(pixels, width, height, x, y, rectWidth, rectHeight, radius, color) {
-  for (let row = Math.max(0, y); row < Math.min(height, y + rectHeight); row += 1) {
-    for (let column = Math.max(0, x); column < Math.min(width, x + rectWidth); column += 1) {
-      if (isInRoundedRect(column, row, x, y, rectWidth, rectHeight, radius)) {
-        setImagePixel(pixels, width, height, column, row, color);
-      }
-    }
-  }
-}
-
-function drawImageRoundedAccentPanel(pixels, width, height, x, y, rectWidth, rectHeight, panelColor, accentColor) {
-  drawImageRoundedRect(pixels, width, height, x, y, rectWidth, rectHeight, cardTheme.panelRadius, panelColor);
-
-  for (let row = Math.max(0, y); row < Math.min(height, y + rectHeight); row += 1) {
-    for (let column = Math.max(0, x); column < Math.min(width, x + 10); column += 1) {
-      if (isInRoundedRect(column, row, x, y, rectWidth, rectHeight, cardTheme.panelRadius)) {
-        setImagePixel(pixels, width, height, column, row, accentColor);
-      }
-    }
-  }
-}
-
 function normalizeImageColor(color, fallback = cardTheme.accent) {
   if (!Array.isArray(color)) {
     return fallback;
@@ -3164,250 +2952,6 @@ function normalizeImageProgress(progress) {
   }
 
   return Math.min(1, Math.max(0, percent));
-}
-
-function drawImageProgressBar(pixels, width, height, x, y, rectWidth, rectHeight, progressPercent, accentColor) {
-  const percent = Math.min(1, Math.max(0, Number(progressPercent) || 0));
-  const radius = Math.floor(rectHeight / 2);
-  const inset = 4;
-  const innerWidth = Math.max(0, rectWidth - inset * 2);
-  const innerHeight = Math.max(0, rectHeight - inset * 2);
-  const fillColor = normalizeImageColor(accentColor);
-
-  drawImageRoundedRect(pixels, width, height, x, y, rectWidth, rectHeight, radius, [51, 65, 85, 255]);
-
-  if (innerWidth <= 0 || innerHeight <= 0 || percent <= 0) {
-    return;
-  }
-
-  const rawFillWidth = percent >= 1 ? innerWidth : Math.floor(innerWidth * percent);
-  const fillWidth = Math.min(innerWidth, Math.max(innerHeight, rawFillWidth));
-  drawImageRoundedRect(pixels, width, height, x + inset, y + inset, fillWidth, innerHeight, Math.floor(innerHeight / 2), fillColor);
-}
-
-function sanitizeImageText(value) {
-  return String(value ?? '')
-    .replace(/<@!?(\d+)>/g, '@USER')
-    .replace(/<#(\d+)>/g, '#CHANNEL')
-    .replace(/[^\x20-\x7e]/g, '?');
-}
-
-function wrapImageText(value, maxCharacters) {
-  const words = sanitizeImageText(value).split(/\s+/).filter(Boolean);
-  const lines = [];
-  let currentLine = '';
-
-  for (const word of words) {
-    if (word.length > maxCharacters) {
-      if (currentLine) {
-        lines.push(currentLine);
-        currentLine = '';
-      }
-
-      for (let index = 0; index < word.length; index += maxCharacters) {
-        lines.push(word.slice(index, index + maxCharacters));
-      }
-      continue;
-    }
-
-    const nextLine = currentLine ? `${currentLine} ${word}` : word;
-    if (nextLine.length > maxCharacters && currentLine) {
-      lines.push(currentLine);
-      currentLine = word;
-    } else {
-      currentLine = nextLine;
-    }
-  }
-
-  if (currentLine) {
-    lines.push(currentLine);
-  }
-
-  return lines.length > 0 ? lines : [''];
-}
-
-function drawImageText(pixels, width, height, text, x, y, scale, color) {
-  let cursorX = x;
-  for (const character of sanitizeImageText(text)) {
-    const glyph = pixelFont[character] || pixelFont['?'];
-    for (let row = 0; row < glyph.length; row += 1) {
-      for (let column = 0; column < glyph[row].length; column += 1) {
-        if (glyph[row][column] === '1') {
-          drawImageRect(pixels, width, height, cursorX + column * scale, y + row * scale, scale, scale, color);
-        }
-      }
-    }
-    cursorX += 6 * scale;
-  }
-}
-
-function measureImageText(text, scale) {
-  return sanitizeImageText(text).length * 6 * scale;
-}
-
-function truncateImageText(value, maxCharacters) {
-  const text = sanitizeImageText(value);
-  if (text.length <= maxCharacters) {
-    return text;
-  }
-
-  return `${text.slice(0, Math.max(0, maxCharacters - 3))}...`;
-}
-
-function drawImageTextRight(pixels, width, height, text, x, y, rectWidth, scale, color) {
-  const maxCharacters = Math.max(1, Math.floor(rectWidth / (6 * scale)));
-  const truncatedText = truncateImageText(text, maxCharacters);
-  drawImageText(pixels, width, height, truncatedText, x + rectWidth - measureImageText(truncatedText, scale), y, scale, color);
-}
-
-function drawWrappedImageText(pixels, width, height, lines, x, y, scale, color) {
-  let cursorY = y;
-  const lineHeight = 10 * scale;
-  for (const line of lines) {
-    drawImageText(pixels, width, height, line, x, cursorY, scale, color);
-    cursorY += lineHeight;
-  }
-  return cursorY;
-}
-
-function createModeratorAuditImage(auditEntry, fields) {
-  const width = 1500;
-  const padding = 60;
-  const valueScale = 4;
-  const labelScale = 3;
-  const maxValueCharacters = Math.floor((width - padding * 2 - 28) / (6 * valueScale));
-  const detailRows = fields.map((field) => ({
-    label: field.name,
-    lines: wrapImageText(field.value, maxValueCharacters),
-  }));
-  const baseHeight = 240;
-  const rowsHeight = detailRows.reduce((total, row) => total + 58 + row.lines.length * 40, 0);
-  const height = Math.max(520, baseHeight + rowsHeight + padding);
-  const pixels = Buffer.alloc(width * height * 4);
-
-  drawImageRect(pixels, width, height, 0, 0, width, height, [17, 24, 39, 255]);
-  drawImageRect(pixels, width, height, 0, 0, width, 18, cardTheme.accent);
-  drawImageRect(pixels, width, height, padding, 58, 116, 116, cardTheme.accent);
-  drawImageText(pixels, width, height, 'MR', padding + 25, 101, 5, [255, 255, 255, 255]);
-  drawImageText(pixels, width, height, 'MODERATOR ROOM ACTION', padding + 145, 64, 5, [248, 250, 252, 255]);
-  drawImageText(pixels, width, height, auditEntry.action, padding + 145, 122, 4, cardTheme.subtitle);
-  drawImageText(pixels, width, height, new Date().toLocaleString('en-GB'), padding + 145, 172, 3, [148, 163, 184, 255]);
-
-  let cursorY = 232;
-  for (const row of detailRows) {
-    const boxHeight = 54 + row.lines.length * 40;
-    drawImageRoundedAccentPanel(
-      pixels,
-      width,
-      height,
-      padding,
-      cursorY,
-      width - padding * 2,
-      boxHeight,
-      [31, 41, 55, 255],
-      cardTheme.accent
-    );
-    drawImageText(pixels, width, height, row.label, padding + 28, cursorY + 18, labelScale, cardTheme.label);
-    drawWrappedImageText(pixels, width, height, row.lines, padding + 28, cursorY + 56, valueScale, [248, 250, 252, 255]);
-    cursorY += boxHeight + 22;
-  }
-
-  return encodePng(width, height, pixels);
-}
-
-function createBotCardImage(card) {
-  const width = 1500;
-  const padding = 60;
-  const valueScale = 4;
-  const labelScale = 3;
-  const footerScale = 3;
-  const maxValueCharacters = Math.floor((width - padding * 2 - 28) / (6 * valueScale));
-  const descriptionLines = card.description ? wrapImageText(card.description, maxValueCharacters) : [];
-  const detailRows = (card.fields || []).map((field) => ({
-    label: field.name,
-    lines: wrapImageText(field.value, maxValueCharacters),
-    progress: normalizeImageProgress(field.progress),
-  }));
-  const descriptionHeight = descriptionLines.length > 0 ? 42 + descriptionLines.length * 40 : 0;
-  const rowsHeight = detailRows.reduce((total, row) => total + 58 + row.lines.length * 40 + (row.progress !== null ? 62 : 0), 0);
-  const timestampText = new Date().toLocaleString('en-GB');
-  const timestampInFooter = card.timestampPlacement === 'footer';
-  const showHeaderTimestamp = !timestampInFooter && card.showHeaderTimestamp !== false;
-  const footerLeft = card.footerLeft || card.footer || (timestampInFooter ? timestampText : null);
-  const footerRight = card.footerRight || null;
-  const footerHeight = card.footer || footerLeft || footerRight ? 64 : 0;
-  const headerBase = showHeaderTimestamp ? 230 : 204;
-  const height = Math.max(480, headerBase + descriptionHeight + rowsHeight + footerHeight + padding);
-  const pixels = Buffer.alloc(width * height * 4);
-  const badge = card.badge || 'BOT';
-  const title = card.title || 'Voice Room Bot';
-
-  drawImageRect(pixels, width, height, 0, 0, width, height, [17, 24, 39, 255]);
-  drawImageRect(pixels, width, height, 0, 0, width, 18, card.color || cardTheme.accent);
-  drawImageRect(pixels, width, height, padding, 58, 116, 116, card.color || cardTheme.accent);
-  drawImageText(pixels, width, height, badge.slice(0, 3), padding + 22, 101, 5, [255, 255, 255, 255]);
-  drawImageText(pixels, width, height, title, padding + 145, 64, 5, [248, 250, 252, 255]);
-
-  if (card.subtitle) {
-    drawImageText(pixels, width, height, card.subtitle, padding + 145, 122, 4, cardTheme.subtitle);
-  }
-
-  if (showHeaderTimestamp) {
-    drawImageText(pixels, width, height, timestampText, padding + 145, 172, 3, [148, 163, 184, 255]);
-  }
-
-  let cursorY = showHeaderTimestamp ? 232 : 206;
-  if (descriptionLines.length > 0) {
-    drawImageRoundedRect(pixels, width, height, padding, cursorY, width - padding * 2, descriptionHeight, cardTheme.panelRadius, [30, 41, 59, 255]);
-    cursorY = drawWrappedImageText(pixels, width, height, descriptionLines, padding + 28, cursorY + 26, valueScale, [226, 232, 240, 255]) + 24;
-  }
-
-  for (const row of detailRows) {
-    const hasProgress = row.progress !== null;
-    const boxHeight = 54 + row.lines.length * 40 + (hasProgress ? 62 : 0);
-    drawImageRoundedAccentPanel(
-      pixels,
-      width,
-      height,
-      padding,
-      cursorY,
-      width - padding * 2,
-      boxHeight,
-      [31, 41, 55, 255],
-      card.color || cardTheme.accent
-    );
-    drawImageText(pixels, width, height, row.label, padding + 28, cursorY + 18, labelScale, cardTheme.label);
-    const textBottom = drawWrappedImageText(pixels, width, height, row.lines, padding + 28, cursorY + 56, valueScale, [248, 250, 252, 255]);
-
-    if (hasProgress) {
-      drawImageProgressBar(
-        pixels,
-        width,
-        height,
-        padding + 28,
-        textBottom + 12,
-        width - padding * 2 - 56,
-        32,
-        row.progress,
-        card.color || cardTheme.accent
-      );
-    }
-
-    cursorY += boxHeight + 22;
-  }
-
-  if (card.footer || footerLeft || footerRight) {
-    const footerY = height - 52;
-    if (footerLeft) {
-      drawImageText(pixels, width, height, footerLeft, padding, footerY, footerScale, [148, 163, 184, 255]);
-    }
-
-    if (footerRight) {
-      drawImageTextRight(pixels, width, height, footerRight, padding + Math.floor((width - padding * 2) / 2), footerY, Math.floor((width - padding * 2) / 2), footerScale, [148, 163, 184, 255]);
-    }
-  }
-
-  return encodePng(width, height, pixels);
 }
 
 function findPowerShellExecutable() {
@@ -3731,6 +3275,160 @@ function cardText(value) {
     .replace(/[\r\t]+/g, ' ')
     .replace(/[^\x20-\x7e\n]/g, '?')
     .trim();
+}
+
+function escapeSvgValue(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function wrapSvgText(value, maxCharacters) {
+  const text = cardText(value);
+  if (!text) {
+    return [];
+  }
+
+  const lines = [];
+  for (const paragraph of text.split('\n')) {
+    const words = paragraph.split(/\s+/).filter(Boolean);
+    let currentLine = '';
+
+    for (const word of words) {
+      if (word.length > maxCharacters) {
+        if (currentLine) {
+          lines.push(currentLine);
+          currentLine = '';
+        }
+
+        for (let offset = 0; offset < word.length; offset += maxCharacters) {
+          lines.push(word.slice(offset, offset + maxCharacters));
+        }
+        continue;
+      }
+
+      const nextLine = currentLine ? `${currentLine} ${word}` : word;
+      if (nextLine.length > maxCharacters && currentLine) {
+        lines.push(currentLine);
+        currentLine = word;
+      } else {
+        currentLine = nextLine;
+      }
+    }
+
+    if (currentLine) {
+      lines.push(currentLine);
+    }
+  }
+
+  return lines.length > 0 ? lines : [];
+}
+
+function appendSvgText(parts, lines, x, y, fontSize, fill, weight = 400, lineHeight = Math.round(fontSize * 1.3), maxLines = null) {
+  const visibleLines = Number.isInteger(maxLines) ? lines.slice(0, maxLines) : lines;
+  for (let index = 0; index < visibleLines.length; index += 1) {
+    const rawLine = visibleLines[index] || '';
+    const line = index === visibleLines.length - 1 && maxLines && lines.length > maxLines
+      ? `${rawLine.slice(0, Math.max(0, rawLine.length - 3))}...`
+      : rawLine;
+    parts.push(`<text x="${x}" y="${y + (index * lineHeight)}" fill="${fill}" font-size="${fontSize}" font-weight="${weight}">${escapeSvgValue(line)}</text>`);
+  }
+}
+
+function createReadableFallbackSvgCard(card) {
+  const readableCard = prepareReadableCard(card);
+  const width = 1125;
+  const padding = 45;
+  const contentWidth = width - padding * 2;
+  const accentColor = normalizeCssColor(readableCard.color || cardTheme.accent);
+  const colors = {
+    background: 'rgb(17, 24, 39)',
+    panel: 'rgb(31, 41, 55)',
+    panelSoft: 'rgb(30, 41, 59)',
+    text: 'rgb(248, 250, 252)',
+    muted: 'rgb(148, 163, 184)',
+    label: 'rgb(253, 186, 116)',
+    subtitle: 'rgb(254, 215, 170)',
+    progressTrack: 'rgb(51, 65, 85)',
+  };
+
+  const titleLines = wrapSvgText(readableCard.title || 'Voice Room Bot', 38);
+  const subtitleLines = wrapSvgText(readableCard.subtitle || '', 54);
+  const descriptionLines = wrapSvgText(readableCard.description || '', 64);
+  const rows = (readableCard.fields || []).map((field) => {
+    const labelLines = wrapSvgText(field.name, 54);
+    const valueLines = wrapSvgText(field.value, 72);
+    const progress = normalizeImageProgress(field.progress);
+    const height = 30 + (Math.max(1, labelLines.length) * 26) + 12 + (Math.max(1, valueLines.length) * 34) + (progress !== null ? 52 : 0) + 22;
+    return { labelLines, valueLines, progress, height };
+  });
+  const descriptionHeight = descriptionLines.length > 0 ? 30 + (descriptionLines.length * 36) + 22 : 0;
+  const rowsHeight = rows.reduce((total, row) => total + row.height + 18, 0);
+  const footerHeight = 72;
+  const headerHeight = 190;
+  const height = Math.max(390, headerHeight + descriptionHeight + rowsHeight + footerHeight + padding);
+  const footerLeft = readableCard.footerLeft || readableCard.footer || new Date().toLocaleString('en-GB');
+  const footerRight = readableCard.footerRight || null;
+  const parts = [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
+    '<style>text{font-family:Arial,Helvetica,sans-serif;letter-spacing:0}</style>',
+    `<rect width="${width}" height="${height}" fill="${colors.background}"/>`,
+    `<rect width="${width}" height="14" fill="${accentColor}"/>`,
+    '<defs><clipPath id="avatarClip"><circle cx="89" cy="103" r="44"/></clipPath></defs>',
+    `<circle cx="89" cy="103" r="44" fill="${accentColor}"/>`,
+  ];
+
+  if (readableCard.avatarUrl) {
+    parts.push(`<image href="${escapeSvgValue(readableCard.avatarUrl)}" x="45" y="59" width="88" height="88" preserveAspectRatio="xMidYMid slice" clip-path="url(#avatarClip)"/>`);
+  } else {
+    appendSvgText(parts, wrapSvgText(readableCard.badge || 'BOT', 4), 65, 113, 26, colors.text, 700, 30, 1);
+  }
+
+  appendSvgText(parts, titleLines, 160, 82, 35, colors.text, 700, 42, 2);
+  if (subtitleLines.length > 0) {
+    appendSvgText(parts, subtitleLines, 160, 134, 25, colors.subtitle, 400, 32, 1);
+  }
+
+  let cursorY = 190;
+  if (descriptionLines.length > 0) {
+    parts.push(`<rect x="${padding}" y="${cursorY}" width="${contentWidth}" height="${descriptionHeight}" rx="14" fill="${colors.panelSoft}"/>`);
+    appendSvgText(parts, descriptionLines, padding + 24, cursorY + 48, 28, colors.text, 400, 36);
+    cursorY += descriptionHeight + 18;
+  }
+
+  for (const row of rows) {
+    parts.push(`<rect x="${padding}" y="${cursorY}" width="${contentWidth}" height="${row.height}" rx="14" fill="${colors.panel}"/>`);
+    parts.push(`<rect x="${padding}" y="${cursorY + 8}" width="8" height="${row.height - 16}" rx="4" fill="${accentColor}"/>`);
+    appendSvgText(parts, row.labelLines.length > 0 ? row.labelLines : [''], padding + 24, cursorY + 44, 20, colors.label, 700, 26);
+    const valueY = cursorY + 44 + (Math.max(1, row.labelLines.length) * 26) + 14;
+    appendSvgText(parts, row.valueLines.length > 0 ? row.valueLines : [''], padding + 24, valueY, 27, colors.text, 400, 34);
+
+    if (row.progress !== null) {
+      const barX = padding + 24;
+      const barY = cursorY + row.height - 42;
+      const barWidth = contentWidth - 48;
+      const fillWidth = Math.max(18, Math.round(barWidth * row.progress));
+      parts.push(`<rect x="${barX}" y="${barY}" width="${barWidth}" height="22" rx="11" fill="${colors.progressTrack}"/>`);
+      parts.push(`<rect x="${barX}" y="${barY}" width="${fillWidth}" height="22" rx="11" fill="${accentColor}"/>`);
+    }
+
+    cursorY += row.height + 18;
+  }
+
+  if (footerLeft) {
+    appendSvgText(parts, [cardText(footerLeft)], padding, height - 30, 20, colors.muted, 400, 24, 1);
+  }
+
+  if (footerRight) {
+    const footerRightText = cardText(footerRight).slice(0, 60);
+    parts.push(`<text x="${width - padding}" y="${height - 30}" fill="${colors.muted}" font-size="20" font-weight="400" text-anchor="end">${escapeSvgValue(footerRightText)}</text>`);
+  }
+
+  parts.push('</svg>');
+  return Buffer.from(parts.join(''), 'utf8');
 }
 
 function setCanvasFont(context, family, size) {
@@ -4060,8 +3758,8 @@ function createCardAttachment(card, slug = 'voice-room-bot') {
     });
   }
 
-  return new AttachmentBuilder(createBotCardImage(prepareReadableCard(card)), {
-    name: `${safeSlug}-${Date.now()}.png`,
+  return new AttachmentBuilder(createReadableFallbackSvgCard(card), {
+    name: `${safeSlug}-${Date.now()}.svg`,
   });
 }
 
