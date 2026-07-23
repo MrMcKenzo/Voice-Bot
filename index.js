@@ -78,7 +78,6 @@ const voiceChannelPermissionSnapshots = new Map();
 const setupSessions = new Map();
 let botOwnerIds = new Set();
 let systemFontRendererAvailable = null;
-let readableCardRendererAvailable = null;
 let readableCardWorker = null;
 let readableCardWorkerQueueDir = null;
 let pureImageRenderer = null;
@@ -3010,10 +3009,11 @@ function getBotAvatarUrl() {
 }
 
 function prepareReadableCard(card) {
+  const hasAvatarUrl = Object.prototype.hasOwnProperty.call(card, 'avatarUrl');
   return {
     ...card,
     timestampPlacement: card.timestampPlacement || 'footer',
-    avatarUrl: card.avatarUrl || getBotAvatarUrl(),
+    avatarUrl: hasAvatarUrl ? card.avatarUrl : getBotAvatarUrl(),
   };
 }
 
@@ -3077,7 +3077,7 @@ function isReadableCardWorkerRunning() {
 
 function startReadableCardWorker() {
   const rendererPath = path.join(__dirname, 'render-readable-card.js');
-  if (readableCardRendererAvailable === false || !fs.existsSync(rendererPath)) {
+  if (!fs.existsSync(rendererPath)) {
     return false;
   }
 
@@ -3117,13 +3117,23 @@ function startReadableCardWorker() {
       }
     });
 
-    readableCardRendererAvailable = true;
     return true;
   } catch (error) {
     console.warn('Readable card renderer worker could not start:', error);
-    readableCardRendererAvailable = false;
     readableCardWorker = null;
     return false;
+  }
+}
+
+function stopReadableCardWorker() {
+  if (!readableCardWorker) {
+    return;
+  }
+
+  const worker = readableCardWorker;
+  readableCardWorker = null;
+  if (worker.exitCode === null && !worker.killed) {
+    worker.kill();
   }
 }
 
@@ -3171,10 +3181,11 @@ function renderReadableCardImageWithWorker(card) {
     fs.renameSync(tempRequestPath, requestPath);
 
     if (!waitForReadableCardWorkerOutput(outputPath, errorPath, 9000)) {
+      console.warn('Readable card renderer worker timed out; restarting worker and using direct renderer.');
+      stopReadableCardWorker();
       return null;
     }
 
-    readableCardRendererAvailable = true;
     return {
       image: fs.readFileSync(outputPath),
       extension: 'png',
@@ -3192,7 +3203,7 @@ function renderReadableCardImageWithWorker(card) {
 
 function renderReadableCardImageDirect(card) {
   const rendererPath = path.join(__dirname, 'render-readable-card.js');
-  if (readableCardRendererAvailable === false || !fs.existsSync(rendererPath)) {
+  if (!fs.existsSync(rendererPath)) {
     return null;
   }
 
@@ -3216,18 +3227,15 @@ function renderReadableCardImageDirect(card) {
       if (result.stderr) {
         console.warn('Readable card renderer failed:', result.stderr.trim());
       }
-      readableCardRendererAvailable = false;
       return null;
     }
 
-    readableCardRendererAvailable = true;
     return {
       image: fs.readFileSync(outputPath),
       extension: 'png',
     };
   } catch (error) {
     console.warn('Readable card renderer failed:', error);
-    readableCardRendererAvailable = false;
     return null;
   } finally {
     fs.rmSync(tempDirectory, { recursive: true, force: true });
@@ -3235,7 +3243,9 @@ function renderReadableCardImageDirect(card) {
 }
 
 function renderReadableCardImage(card) {
-  return renderReadableCardImageWithWorker(card) || renderReadableCardImageDirect(card);
+  return renderReadableCardImageWithWorker(card) ||
+    renderReadableCardImageDirect(card) ||
+    renderReadableCardImageDirect({ ...card, avatarUrl: null });
 }
 
 function warmReadableCardWorker() {
@@ -3318,160 +3328,6 @@ function cardText(value) {
     .replace(/[\r\t]+/g, ' ')
     .replace(/[^\x20-\x7e\n]/g, '?')
     .trim();
-}
-
-function escapeSvgValue(value) {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function wrapSvgText(value, maxCharacters) {
-  const text = cardText(value);
-  if (!text) {
-    return [];
-  }
-
-  const lines = [];
-  for (const paragraph of text.split('\n')) {
-    const words = paragraph.split(/\s+/).filter(Boolean);
-    let currentLine = '';
-
-    for (const word of words) {
-      if (word.length > maxCharacters) {
-        if (currentLine) {
-          lines.push(currentLine);
-          currentLine = '';
-        }
-
-        for (let offset = 0; offset < word.length; offset += maxCharacters) {
-          lines.push(word.slice(offset, offset + maxCharacters));
-        }
-        continue;
-      }
-
-      const nextLine = currentLine ? `${currentLine} ${word}` : word;
-      if (nextLine.length > maxCharacters && currentLine) {
-        lines.push(currentLine);
-        currentLine = word;
-      } else {
-        currentLine = nextLine;
-      }
-    }
-
-    if (currentLine) {
-      lines.push(currentLine);
-    }
-  }
-
-  return lines.length > 0 ? lines : [];
-}
-
-function appendSvgText(parts, lines, x, y, fontSize, fill, weight = 400, lineHeight = Math.round(fontSize * 1.3), maxLines = null) {
-  const visibleLines = Number.isInteger(maxLines) ? lines.slice(0, maxLines) : lines;
-  for (let index = 0; index < visibleLines.length; index += 1) {
-    const rawLine = visibleLines[index] || '';
-    const line = index === visibleLines.length - 1 && maxLines && lines.length > maxLines
-      ? `${rawLine.slice(0, Math.max(0, rawLine.length - 3))}...`
-      : rawLine;
-    parts.push(`<text x="${x}" y="${y + (index * lineHeight)}" fill="${fill}" font-size="${fontSize}" font-weight="${weight}">${escapeSvgValue(line)}</text>`);
-  }
-}
-
-function createReadableFallbackSvgCard(card) {
-  const readableCard = prepareReadableCard(card);
-  const width = 1125;
-  const padding = 45;
-  const contentWidth = width - padding * 2;
-  const accentColor = normalizeCssColor(readableCard.color || cardTheme.accent);
-  const colors = {
-    background: 'rgb(17, 24, 39)',
-    panel: 'rgb(31, 41, 55)',
-    panelSoft: 'rgb(30, 41, 59)',
-    text: 'rgb(248, 250, 252)',
-    muted: 'rgb(148, 163, 184)',
-    label: 'rgb(253, 186, 116)',
-    subtitle: 'rgb(254, 215, 170)',
-    progressTrack: 'rgb(51, 65, 85)',
-  };
-
-  const titleLines = wrapSvgText(readableCard.title || 'Voice Room Bot', 38);
-  const subtitleLines = wrapSvgText(readableCard.subtitle || '', 54);
-  const descriptionLines = wrapSvgText(readableCard.description || '', 64);
-  const rows = (readableCard.fields || []).map((field) => {
-    const labelLines = wrapSvgText(field.name, 54);
-    const valueLines = wrapSvgText(field.value, 72);
-    const progress = normalizeImageProgress(field.progress);
-    const height = 30 + (Math.max(1, labelLines.length) * 26) + 12 + (Math.max(1, valueLines.length) * 34) + (progress !== null ? 52 : 0) + 22;
-    return { labelLines, valueLines, progress, height };
-  });
-  const descriptionHeight = descriptionLines.length > 0 ? 30 + (descriptionLines.length * 36) + 22 : 0;
-  const rowsHeight = rows.reduce((total, row) => total + row.height + 18, 0);
-  const footerHeight = 72;
-  const headerHeight = 190;
-  const height = Math.max(390, headerHeight + descriptionHeight + rowsHeight + footerHeight + padding);
-  const footerLeft = readableCard.footerLeft || readableCard.footer || new Date().toLocaleString('en-GB');
-  const footerRight = readableCard.footerRight || null;
-  const parts = [
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
-    '<style>text{font-family:Arial,Helvetica,sans-serif;letter-spacing:0}</style>',
-    `<rect width="${width}" height="${height}" fill="${colors.background}"/>`,
-    `<rect width="${width}" height="14" fill="${accentColor}"/>`,
-    '<defs><clipPath id="avatarClip"><circle cx="89" cy="103" r="44"/></clipPath></defs>',
-    `<circle cx="89" cy="103" r="44" fill="${accentColor}"/>`,
-  ];
-
-  if (readableCard.avatarUrl) {
-    parts.push(`<image href="${escapeSvgValue(readableCard.avatarUrl)}" x="45" y="59" width="88" height="88" preserveAspectRatio="xMidYMid slice" clip-path="url(#avatarClip)"/>`);
-  } else {
-    appendSvgText(parts, wrapSvgText(readableCard.badge || 'BOT', 4), 65, 113, 26, colors.text, 700, 30, 1);
-  }
-
-  appendSvgText(parts, titleLines, 160, 82, 35, colors.text, 700, 42, 2);
-  if (subtitleLines.length > 0) {
-    appendSvgText(parts, subtitleLines, 160, 134, 25, colors.subtitle, 400, 32, 1);
-  }
-
-  let cursorY = 190;
-  if (descriptionLines.length > 0) {
-    parts.push(`<rect x="${padding}" y="${cursorY}" width="${contentWidth}" height="${descriptionHeight}" rx="14" fill="${colors.panelSoft}"/>`);
-    appendSvgText(parts, descriptionLines, padding + 24, cursorY + 48, 28, colors.text, 400, 36);
-    cursorY += descriptionHeight + 18;
-  }
-
-  for (const row of rows) {
-    parts.push(`<rect x="${padding}" y="${cursorY}" width="${contentWidth}" height="${row.height}" rx="14" fill="${colors.panel}"/>`);
-    parts.push(`<rect x="${padding}" y="${cursorY + 8}" width="8" height="${row.height - 16}" rx="4" fill="${accentColor}"/>`);
-    appendSvgText(parts, row.labelLines.length > 0 ? row.labelLines : [''], padding + 24, cursorY + 44, 20, colors.label, 700, 26);
-    const valueY = cursorY + 44 + (Math.max(1, row.labelLines.length) * 26) + 14;
-    appendSvgText(parts, row.valueLines.length > 0 ? row.valueLines : [''], padding + 24, valueY, 27, colors.text, 400, 34);
-
-    if (row.progress !== null) {
-      const barX = padding + 24;
-      const barY = cursorY + row.height - 42;
-      const barWidth = contentWidth - 48;
-      const fillWidth = Math.max(18, Math.round(barWidth * row.progress));
-      parts.push(`<rect x="${barX}" y="${barY}" width="${barWidth}" height="22" rx="11" fill="${colors.progressTrack}"/>`);
-      parts.push(`<rect x="${barX}" y="${barY}" width="${fillWidth}" height="22" rx="11" fill="${accentColor}"/>`);
-    }
-
-    cursorY += row.height + 18;
-  }
-
-  if (footerLeft) {
-    appendSvgText(parts, [cardText(footerLeft)], padding, height - 30, 20, colors.muted, 400, 24, 1);
-  }
-
-  if (footerRight) {
-    const footerRightText = cardText(footerRight).slice(0, 60);
-    parts.push(`<text x="${width - padding}" y="${height - 30}" fill="${colors.muted}" font-size="20" font-weight="400" text-anchor="end">${escapeSvgValue(footerRightText)}</text>`);
-  }
-
-  parts.push('</svg>');
-  return Buffer.from(parts.join(''), 'utf8');
 }
 
 function setCanvasFont(context, family, size) {
@@ -3801,9 +3657,7 @@ function createCardAttachment(card, slug = 'voice-room-bot') {
     });
   }
 
-  return new AttachmentBuilder(createReadableFallbackSvgCard(card), {
-    name: `${safeSlug}-${Date.now()}.svg`,
-  });
+  throw new Error('Readable PNG card renderer failed to produce an image.');
 }
 
 function createReadableCardAttachment(card, slug = 'voice-room-bot') {
