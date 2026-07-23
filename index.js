@@ -1,19 +1,15 @@
 'use strict';
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
-const https = require('https');
-const { spawn, spawnSync } = require('child_process');
-const { PassThrough, Readable } = require('stream');
 const {
   ActionRowBuilder,
   ApplicationCommandOptionType,
   ApplicationCommandType,
-  AttachmentBuilder,
   ChannelSelectMenuBuilder,
   ChannelType,
   Client,
+  EmbedBuilder,
   Events,
   GatewayIntentBits,
   PermissionFlagsBits,
@@ -77,12 +73,6 @@ const voiceChannelOwners = new Map();
 const voiceChannelPermissionSnapshots = new Map();
 const setupSessions = new Map();
 let botOwnerIds = new Set();
-let systemFontRendererAvailable = null;
-let readableCardWorker = null;
-let readableCardWorkerQueueDir = null;
-let pureImageRenderer = null;
-let pureImageRendererAvailable = null;
-let pureImageFontsLoaded = false;
 const cardTheme = {
   accent: [249, 115, 22, 255],
   subtitle: [254, 215, 170, 255],
@@ -1828,7 +1818,7 @@ async function buildTopHostsCard(guild, limit = 10) {
     });
   }
 
-  return createCardAttachment({
+  return createCardEmbed({
     badge: 'TOP',
     title: 'Top Voice Room Hosts',
     description: fields.length > 1 ? `Showing the top ${fields.length} host(s) by XP.` : null,
@@ -1860,7 +1850,7 @@ async function buildHostProfileCard(guild, userId) {
     fields.push({ name: 'No XP yet', value: 'Host a managed voice room to start earning XP and streaks.', inline: false });
   }
 
-  return createCardAttachment({
+  return createCardEmbed({
     badge: 'XP',
     title: 'Host Profile',
     subtitle: hostLabel,
@@ -1929,7 +1919,7 @@ async function buildTopMembersCard(guild, limit = 10) {
     });
   }
 
-  return createCardAttachment({
+  return createCardEmbed({
     badge: 'TOP',
     title: 'Top Voice Room Members',
     description: fields.length > 1 ? `Showing the top ${fields.length} member(s) by regular voice XP.` : null,
@@ -1961,7 +1951,7 @@ async function buildVoiceProfileCard(guild, userId) {
     fields.push({ name: 'No XP yet', value: 'Join a managed voice room as a regular member to start earning XP.', inline: false });
   }
 
-  return createCardAttachment({
+  return createCardEmbed({
     badge: 'XP',
     title: 'Voice Member Profile',
     subtitle: memberLabel,
@@ -2501,7 +2491,7 @@ function buildOwnerControlComponents(voiceChannelId) {
 
 function buildCapacityCard(currentLimit) {
   const current = currentLimit && currentLimit > 0 ? currentLimit : 'not set';
-  return createCardAttachment({
+  return createCardEmbed({
     badge: 'CAP',
     title: 'Voice Channel Capacity',
     description: 'Choose how many users can join this voice channel.',
@@ -2519,7 +2509,7 @@ async function sendCapacitySelector(voiceChannel, ownerMember) {
     try {
       await textChannel.send({
         content: `${ownerMember}`,
-        files: [card],
+        embeds: [card],
         components: [row],
       });
       return true;
@@ -2530,7 +2520,7 @@ async function sendCapacitySelector(voiceChannel, ownerMember) {
 
   try {
     await ownerMember.user.send({
-      files: [buildCapacityCard(voiceChannel.userLimit || 0)],
+      embeds: [buildCapacityCard(voiceChannel.userLimit || 0)],
       components: [row],
     });
     return true;
@@ -2629,7 +2619,7 @@ async function notifyNewOwner(voiceChannel, newOwner, options = {}) {
         ? `${previousOwner} left the room, so ${newOwner} is now the owner.`
         : `${newOwner} is now the owner of this voice channel.`;
 
-  const card = createCardAttachment({
+  const card = createCardEmbed({
     badge: 'OWN',
     title: 'Voice Channel Owner Updated',
     description,
@@ -2647,7 +2637,7 @@ async function notifyNewOwner(voiceChannel, newOwner, options = {}) {
     try {
       await textChannel.send({
         content: `${newOwner}`,
-        files: [card],
+        embeds: [card],
         components,
       });
       return;
@@ -2658,7 +2648,7 @@ async function notifyNewOwner(voiceChannel, newOwner, options = {}) {
 
   try {
     await newOwner.user.send({
-      files: [createCardAttachment({
+      embeds: [createCardEmbed({
         badge: 'OWN',
         title: 'Voice Channel Owner Updated',
         description,
@@ -2677,7 +2667,7 @@ async function notifyNewOwner(voiceChannel, newOwner, options = {}) {
   if (textChannel) {
     await textChannel.send({
       content: `${newOwner}`,
-      files: [createCardAttachment({
+      embeds: [createCardEmbed({
         badge: 'OWN',
         title: 'Voice Channel Owner Updated',
         description,
@@ -2693,7 +2683,7 @@ async function notifyNewOwner(voiceChannel, newOwner, options = {}) {
   }
 
   await newOwner.user.send({
-    files: [createCardAttachment({
+    embeds: [createCardEmbed({
       badge: 'OWN',
       title: 'Voice Channel Owner Updated',
       description,
@@ -2857,7 +2847,7 @@ function buildRoomsCard(guild) {
     return `${category.name}: ${availableChannels.size}/${archiveChannels.size} archived rooms available (${totalManagedChannels} managed${autoCreateText})`;
   });
 
-  return createCardAttachment({
+  return createCardEmbed({
     badge: 'RMS',
     title: 'Voice Rooms',
     description: `${activeRoomLines.length} active room(s).`,
@@ -2894,7 +2884,7 @@ function buildVoiceActivityLogCard(member, oldState, newState) {
   const memberLabel = `${member} (${member.user.tag})`;
 
   if (!oldState.channelId && newState.channelId) {
-    return createCardAttachment({
+    return createCardEmbed({
       badge: 'JOIN',
       title: 'Voice Channel Joined',
       description: `${member} joined ${newChannelLabel}.`,
@@ -2908,7 +2898,7 @@ function buildVoiceActivityLogCard(member, oldState, newState) {
   }
 
   if (oldState.channelId && !newState.channelId) {
-    return createCardAttachment({
+    return createCardEmbed({
       badge: 'LEFT',
       title: 'Voice Channel Left',
       description: `${member} left ${oldChannelLabel}.`,
@@ -2921,7 +2911,7 @@ function buildVoiceActivityLogCard(member, oldState, newState) {
     }, 'voice-left');
   }
 
-  return createCardAttachment({
+  return createCardEmbed({
     badge: 'MOVE',
     title: 'Voice Channel Moved',
     description: `${member} moved from ${oldChannelLabel} to ${newChannelLabel}.`,
@@ -2965,7 +2955,7 @@ async function sendVoiceActivityLog(oldState, newState) {
     return;
   }
 
-  await logChannel.send({ files: [card] }).catch((error) => {
+  await logChannel.send({ embeds: [card] }).catch((error) => {
     console.warn(`Could not send voice activity log in ${guild.name}:`, error);
   });
 }
@@ -2996,680 +2986,129 @@ function normalizeImageProgress(progress) {
   return Math.min(1, Math.max(0, percent));
 }
 
-function findPowerShellExecutable() {
-  if (process.platform === 'win32') {
-    return 'powershell.exe';
-  }
-
-  return 'pwsh';
-}
-
 function getBotAvatarUrl() {
   return client.user?.displayAvatarURL({ extension: 'png', size: 128 }) || null;
 }
 
-function prepareReadableCard(card) {
-  const hasAvatarUrl = Object.prototype.hasOwnProperty.call(card, 'avatarUrl');
-  return {
-    ...card,
-    timestampPlacement: card.timestampPlacement || 'footer',
-    avatarUrl: hasAvatarUrl ? card.avatarUrl : getBotAvatarUrl(),
-  };
-}
-
-function renderCardImage(card) {
-  const rendererPath = path.join(__dirname, 'render-card.ps1');
-  if (process.platform !== 'win32' || systemFontRendererAvailable === false || !fs.existsSync(rendererPath)) {
-    return null;
-  }
-
-  const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'server-bot-card-'));
-  const inputPath = path.join(tempDirectory, 'card.json');
-  const outputPath = path.join(tempDirectory, 'card.png');
-
-  try {
-    fs.writeFileSync(inputPath, JSON.stringify(prepareReadableCard(card)), 'utf8');
-    const result = spawnSync(findPowerShellExecutable(), [
-      '-NoProfile',
-      '-ExecutionPolicy',
-      'Bypass',
-      '-File',
-      rendererPath,
-      inputPath,
-      outputPath,
-    ], {
-      encoding: 'utf8',
-      timeout: 7000,
-      windowsHide: true,
-    });
-
-    if (result.status !== 0 || !fs.existsSync(outputPath)) {
-      if (result.stderr) {
-        console.warn('System font card renderer failed:', result.stderr.trim());
-      }
-      systemFontRendererAvailable = false;
-      return null;
-    }
-
-    systemFontRendererAvailable = true;
-    return fs.readFileSync(outputPath);
-  } catch (error) {
-    console.warn('System font card renderer failed:', error);
-    systemFontRendererAvailable = false;
-    return null;
-  } finally {
-    fs.rmSync(tempDirectory, { recursive: true, force: true });
-  }
-}
-
-function getReadableCardWorkerQueueDir() {
-  if (!readableCardWorkerQueueDir) {
-    readableCardWorkerQueueDir = path.join(os.tmpdir(), `voice-bot-readable-card-worker-${process.pid}`);
-  }
-
-  fs.mkdirSync(readableCardWorkerQueueDir, { recursive: true });
-  return readableCardWorkerQueueDir;
-}
-
-function isReadableCardWorkerRunning() {
-  return readableCardWorker && readableCardWorker.exitCode === null && !readableCardWorker.killed;
-}
-
-function startReadableCardWorker() {
-  const rendererPath = path.join(__dirname, 'render-readable-card.js');
-  if (!fs.existsSync(rendererPath)) {
-    return false;
-  }
-
-  if (isReadableCardWorkerRunning()) {
-    return true;
-  }
-
-  try {
-    const queueDir = getReadableCardWorkerQueueDir();
-    readableCardWorker = spawn(process.execPath, [
-      rendererPath,
-      '--worker',
-      queueDir,
-    ], {
-      env: {
-        ...process.env,
-        READABLE_CARD_WORKER_PARENT_PID: String(process.pid),
-      },
-      stdio: ['ignore', 'ignore', 'pipe'],
-      windowsHide: true,
-    });
-
-    readableCardWorker.stderr.on('data', (chunk) => {
-      const message = chunk.toString().trim();
-      if (message) {
-        console.warn('Readable card renderer worker:', message);
-      }
-    });
-
-    readableCardWorker.on('exit', (code, signal) => {
-      if (readableCardWorker?.exitCode !== null) {
-        readableCardWorker = null;
-      }
-
-      if (code && code !== 0) {
-        console.warn(`Readable card renderer worker exited with code ${code}${signal ? ` and signal ${signal}` : ''}.`);
-      }
-    });
-
-    return true;
-  } catch (error) {
-    console.warn('Readable card renderer worker could not start:', error);
-    readableCardWorker = null;
-    return false;
-  }
-}
-
-function stopReadableCardWorker() {
-  if (!readableCardWorker) {
-    return;
-  }
-
-  const worker = readableCardWorker;
-  readableCardWorker = null;
-  if (worker.exitCode === null && !worker.killed) {
-    worker.kill();
-  }
-}
-
-function waitForReadableCardWorkerOutput(outputPath, errorPath, timeoutMs) {
-  const waitArray = new Int32Array(new SharedArrayBuffer(4));
-  const deadline = Date.now() + timeoutMs;
-
-  while (Date.now() < deadline) {
-    if (fs.existsSync(outputPath)) {
-      return true;
-    }
-
-    if (fs.existsSync(errorPath)) {
-      throw new Error(fs.readFileSync(errorPath, 'utf8').trim() || 'Readable card renderer worker failed.');
-    }
-
-    if (readableCardWorker && readableCardWorker.exitCode !== null) {
-      return false;
-    }
-
-    Atomics.wait(waitArray, 0, 0, 35);
-  }
-
-  return false;
-}
-
-function renderReadableCardImageWithWorker(card) {
-  if (!startReadableCardWorker()) {
-    return null;
-  }
-
-  const queueDir = getReadableCardWorkerQueueDir();
-  const requestId = `${Date.now()}-${process.pid}-${Math.random().toString(16).slice(2)}`;
-  const requestPath = path.join(queueDir, `${requestId}.json`);
-  const tempRequestPath = `${requestPath}.tmp`;
-  const outputPath = path.join(queueDir, `${requestId}.png`);
-  const errorPath = path.join(queueDir, `${requestId}.err`);
-
-  try {
-    fs.writeFileSync(tempRequestPath, JSON.stringify({
-      card: prepareReadableCard(card),
-      outputPath,
-      errorPath,
-    }), 'utf8');
-    fs.renameSync(tempRequestPath, requestPath);
-
-    if (!waitForReadableCardWorkerOutput(outputPath, errorPath, 9000)) {
-      console.warn('Readable card renderer worker timed out; restarting worker and using direct renderer.');
-      stopReadableCardWorker();
-      return null;
-    }
-
-    return {
-      image: fs.readFileSync(outputPath),
-      extension: 'png',
-    };
-  } catch (error) {
-    console.warn('Readable card renderer worker failed:', error.message || error);
-    return null;
-  } finally {
-    fs.rmSync(tempRequestPath, { force: true });
-    fs.rmSync(requestPath, { force: true });
-    fs.rmSync(outputPath, { force: true });
-    fs.rmSync(errorPath, { force: true });
-  }
-}
-
-function renderReadableCardImageDirect(card) {
-  const rendererPath = path.join(__dirname, 'render-readable-card.js');
-  if (!fs.existsSync(rendererPath)) {
-    return null;
-  }
-
-  const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-bot-readable-card-'));
-  const inputPath = path.join(tempDirectory, 'card.json');
-  const outputPath = path.join(tempDirectory, 'card.png');
-
-  try {
-    fs.writeFileSync(inputPath, JSON.stringify(prepareReadableCard(card)), 'utf8');
-    const result = spawnSync(process.execPath, [
-      rendererPath,
-      inputPath,
-      outputPath,
-    ], {
-      encoding: 'utf8',
-      timeout: 12000,
-      windowsHide: true,
-    });
-
-    if (result.status !== 0 || !fs.existsSync(outputPath)) {
-      if (result.stderr) {
-        console.warn('Readable card renderer failed:', result.stderr.trim());
-      }
-      return null;
-    }
-
-    return {
-      image: fs.readFileSync(outputPath),
-      extension: 'png',
-    };
-  } catch (error) {
-    console.warn('Readable card renderer failed:', error);
-    return null;
-  } finally {
-    fs.rmSync(tempDirectory, { recursive: true, force: true });
-  }
-}
-
-function renderReadableCardImage(card) {
-  return renderReadableCardImageWithWorker(card) ||
-    renderReadableCardImageDirect(card) ||
-    renderReadableCardImageDirect({ ...card, avatarUrl: null });
-}
-
-function warmReadableCardWorker() {
-  if (process.platform === 'win32') {
-    return;
-  }
-
-  renderReadableCardImageWithWorker({
-    badge: 'BOT',
-    title: 'Voice Room Bot',
-    description: 'Renderer warmup',
-    timestampPlacement: 'footer',
-  });
-}
-
-function getPureImageRenderer() {
-  if (pureImageRendererAvailable === false) {
-    return null;
-  }
-
-  if (pureImageRenderer) {
-    return pureImageRenderer;
-  }
-
-  try {
-    pureImageRenderer = require('pureimage');
-    pureImageRendererAvailable = true;
-    return pureImageRenderer;
-  } catch (error) {
-    console.warn('Pure image card renderer is not available:', error.message || error);
-    pureImageRendererAvailable = false;
-    return null;
-  }
-}
-
-function firstExistingPath(paths) {
-  return paths.find((candidatePath) => candidatePath && fs.existsSync(candidatePath)) || null;
-}
-
-function loadPureImageFonts(pureImage) {
-  if (pureImageFontsLoaded) {
-    return true;
-  }
-
-  const regularFontPath = firstExistingPath([
-    path.join(process.env.WINDIR || 'C:\\Windows', 'Fonts', 'segoeui.ttf'),
-    path.join(process.env.WINDIR || 'C:\\Windows', 'Fonts', 'arial.ttf'),
-    '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-    '/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf',
-  ]);
-  const boldFontPath = firstExistingPath([
-    path.join(process.env.WINDIR || 'C:\\Windows', 'Fonts', 'segoeuib.ttf'),
-    path.join(process.env.WINDIR || 'C:\\Windows', 'Fonts', 'arialbd.ttf'),
-    '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
-    '/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf',
-    regularFontPath,
-  ]);
-
-  if (!regularFontPath || !boldFontPath) {
-    console.warn('Readable image card renderer could not find a usable system font.');
-    return false;
-  }
-
-  try {
-    pureImage.registerFont(regularFontPath, 'CardRegular').loadSync();
-    pureImage.registerFont(boldFontPath, 'CardBold').loadSync();
-    pureImageFontsLoaded = true;
-    return true;
-  } catch (error) {
-    console.warn('Readable image card renderer could not load system fonts:', error);
-    return false;
-  }
-}
-
-function cardText(value) {
-  return String(value ?? '')
-    .replace(/<@!?(\d+)>/g, '@User')
-    .replace(/<@&(\d+)>/g, '@Role')
-    .replace(/<#(\d+)>/g, '#Channel')
-    .replace(/[\r\t]+/g, ' ')
-    .replace(/[^\x20-\x7e\n]/g, '?')
+function embedText(value, fallback = '') {
+  const text = String(value ?? fallback)
+    .replace(/\r/g, '')
     .trim();
+  return text || fallback;
 }
 
-function setCanvasFont(context, family, size) {
-  context.font = `${size}pt ${family}`;
-}
-
-function measureCanvasText(context, text, family, size) {
-  setCanvasFont(context, family, size);
-  return context.measureText(text).width || 0;
-}
-
-function wrapCanvasText(context, value, family, size, maxWidth) {
-  const text = cardText(value);
-  if (!text) {
-    return [''];
+function truncateEmbedText(value, maxLength, fallback = '-') {
+  const text = embedText(value, fallback);
+  if (text.length <= maxLength) {
+    return text;
   }
 
-  const lines = [];
-  for (const paragraph of text.split('\n')) {
-    const words = paragraph.split(/\s+/).filter(Boolean);
-    let currentLine = '';
-
-    for (const word of words) {
-      const nextLine = currentLine ? `${currentLine} ${word}` : word;
-      if (measureCanvasText(context, nextLine, family, size) <= maxWidth) {
-        currentLine = nextLine;
-        continue;
-      }
-
-      if (currentLine) {
-        lines.push(currentLine);
-        currentLine = '';
-      }
-
-      if (measureCanvasText(context, word, family, size) <= maxWidth) {
-        currentLine = word;
-        continue;
-      }
-
-      let fragment = '';
-      for (const character of word) {
-        const nextFragment = `${fragment}${character}`;
-        if (measureCanvasText(context, nextFragment, family, size) <= maxWidth) {
-          fragment = nextFragment;
-        } else {
-          if (fragment) {
-            lines.push(fragment);
-          }
-          fragment = character;
-        }
-      }
-      currentLine = fragment;
-    }
-
-    if (currentLine) {
-      lines.push(currentLine);
-    }
+  if (maxLength <= 3) {
+    return text.slice(0, Math.max(1, maxLength));
   }
 
-  return lines.length > 0 ? lines : [''];
+  return `${text.slice(0, Math.max(0, maxLength - 3))}...`;
 }
 
-function fillCanvasRoundedRect(context, x, y, width, height, radius, fillStyle) {
-  const roundedRadius = Math.max(0, Math.min(radius, Math.floor(Math.min(width, height) / 2)));
-  context.fillStyle = fillStyle;
-  context.beginPath();
-  context.moveTo(x + roundedRadius, y);
-  context.lineTo(x + width - roundedRadius, y);
-  context.quadraticCurveTo(x + width, y, x + width, y + roundedRadius);
-  context.lineTo(x + width, y + height - roundedRadius);
-  context.quadraticCurveTo(x + width, y + height, x + width - roundedRadius, y + height);
-  context.lineTo(x + roundedRadius, y + height);
-  context.quadraticCurveTo(x, y + height, x, y + height - roundedRadius);
-  context.lineTo(x, y + roundedRadius);
-  context.quadraticCurveTo(x, y, x + roundedRadius, y);
-  context.closePath();
-  context.fill();
+function cardColorInt(color) {
+  const [red, green, blue] = normalizeImageColor(color || cardTheme.accent);
+  return (red << 16) + (green << 8) + blue;
 }
 
-function drawCanvasLines(context, lines, x, y, family, size, lineHeight, fillStyle, maxLines = null) {
-  setCanvasFont(context, family, size);
-  context.fillStyle = fillStyle;
-  const visibleLines = Number.isInteger(maxLines) ? lines.slice(0, maxLines) : lines;
-  for (let index = 0; index < visibleLines.length; index += 1) {
-    const line = index === visibleLines.length - 1 && maxLines && lines.length > maxLines
-      ? `${visibleLines[index].slice(0, Math.max(0, visibleLines[index].length - 3))}...`
-      : visibleLines[index];
-    context.fillText(line, x, y + (index * lineHeight));
-  }
-}
-
-function normalizeCssColor(color, fallback = cardTheme.accent) {
-  const normalized = normalizeImageColor(color, fallback);
-  return `rgb(${normalized[0]}, ${normalized[1]}, ${normalized[2]})`;
-}
-
-function fetchUrlBuffer(url, redirectCount = 0) {
-  return new Promise((resolve, reject) => {
-    if (!url || redirectCount > 3) {
-      reject(new Error('Invalid image URL'));
-      return;
-    }
-
-    const request = https.get(url, {
-      timeout: 4000,
-      headers: { 'User-Agent': 'Voice Bot image renderer' },
-    }, (response) => {
-      if ([301, 302, 303, 307, 308].includes(response.statusCode) && response.headers.location) {
-        response.resume();
-        fetchUrlBuffer(new URL(response.headers.location, url).toString(), redirectCount + 1)
-          .then(resolve)
-          .catch(reject);
-        return;
-      }
-
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        response.resume();
-        reject(new Error(`Image request failed with status ${response.statusCode}`));
-        return;
-      }
-
-      const chunks = [];
-      response.on('data', (chunk) => chunks.push(chunk));
-      response.on('end', () => resolve(Buffer.concat(chunks)));
-    });
-
-    request.on('timeout', () => request.destroy(new Error('Image request timed out')));
-    request.on('error', reject);
-  });
-}
-
-async function loadPureImageAvatar(pureImage, avatarUrl) {
-  if (!avatarUrl) {
+function formatEmbedProgress(progress) {
+  const percent = normalizeImageProgress(progress);
+  if (percent === null) {
     return null;
   }
 
-  try {
-    const avatarBuffer = await fetchUrlBuffer(avatarUrl);
-    const stream = Readable.from(avatarBuffer);
-    const isJpeg = avatarBuffer[0] === 0xff && avatarBuffer[1] === 0xd8;
-    return isJpeg
-      ? await pureImage.decodeJPEGFromStream(stream)
-      : await pureImage.decodePNGFromStream(stream);
-  } catch (error) {
-    console.warn('Could not load bot avatar for image card:', error.message || error);
-    return null;
-  }
+  const filled = Math.round(percent * 10);
+  return `[${'#'.repeat(filled)}${'-'.repeat(10 - filled)}] ${Math.round(percent * 100)}%`;
 }
 
-function drawPureImageAvatar(context, avatarImage, x, y, size, accentColor) {
-  context.fillStyle = accentColor;
-  context.beginPath();
-  context.arc(x + size / 2, y + size / 2, size / 2, 0, Math.PI * 2);
-  context.fill();
-
-  if (!avatarImage) {
-    return false;
-  }
-
-  context.save();
-  context.beginPath();
-  context.arc(x + size / 2, y + size / 2, size / 2 - 3, 0, Math.PI * 2);
-  context.clip();
-  context.drawImage(avatarImage, x, y, size, size);
-  context.restore();
-  return true;
-}
-
-async function encodePureImagePng(pureImage, image) {
-  return new Promise((resolve, reject) => {
-    const outputStream = new PassThrough();
-    const chunks = [];
-    outputStream.on('data', (chunk) => chunks.push(chunk));
-    outputStream.on('end', () => resolve(Buffer.concat(chunks)));
-    outputStream.on('error', reject);
-    pureImage.encodePNGToStream(image, outputStream).catch(reject);
-  });
-}
-
-async function renderPureImageHelpCard(card) {
-  const pureImage = getPureImageRenderer();
-  if (!pureImage || !loadPureImageFonts(pureImage)) {
-    return null;
-  }
-
-  const width = 1500;
-  const padding = 60;
-  const contentWidth = width - padding * 2;
-  const accentColor = normalizeCssColor(card.color || cardTheme.accent);
-  const colors = {
-    background: 'rgb(17, 24, 39)',
-    panel: 'rgb(31, 41, 55)',
-    panelSoft: 'rgb(30, 41, 59)',
-    text: 'rgb(248, 250, 252)',
-    muted: 'rgb(148, 163, 184)',
-    label: 'rgb(253, 186, 116)',
-    subtitle: 'rgb(254, 215, 170)',
-  };
-  const fonts = {
-    title: { family: 'CardBold', size: 44, lineHeight: 54 },
-    subtitle: { family: 'CardRegular', size: 32, lineHeight: 40 },
-    label: { family: 'CardBold', size: 24, lineHeight: 32 },
-    body: { family: 'CardRegular', size: 34, lineHeight: 44 },
-    footer: { family: 'CardRegular', size: 24, lineHeight: 32 },
-    badge: { family: 'CardBold', size: 38, lineHeight: 48 },
-  };
-
-  const measureImage = pureImage.make(1, 1);
-  const measureContext = measureImage.getContext('2d');
-  const descriptionLines = card.description
-    ? wrapCanvasText(measureContext, card.description, fonts.body.family, fonts.body.size, contentWidth - 56)
-    : [];
-  const rows = (card.fields || []).map((field) => {
-    const labelLines = wrapCanvasText(measureContext, field.name, fonts.label.family, fonts.label.size, contentWidth - 56);
-    const valueLines = wrapCanvasText(measureContext, field.value, fonts.body.family, fonts.body.size, contentWidth - 56);
-    const height = 34 + (labelLines.length * fonts.label.lineHeight) + 14 + (valueLines.length * fonts.body.lineHeight) + 22;
-    return { labelLines, valueLines, height };
-  });
-  const descriptionHeight = descriptionLines.length > 0
-    ? 32 + (descriptionLines.length * fonts.body.lineHeight)
-    : 0;
-  const rowsHeight = rows.reduce((total, row) => total + row.height + 22, 0);
-  const footerHeight = 76;
-  const height = Math.max(520, 214 + descriptionHeight + rowsHeight + footerHeight + padding);
-  const image = pureImage.make(width, height);
-  const context = image.getContext('2d');
-
-  context.fillStyle = colors.background;
-  context.fillRect(0, 0, width, height);
-  context.fillStyle = accentColor;
-  context.fillRect(0, 0, width, 18);
-
-  const avatarImage = await loadPureImageAvatar(pureImage, getBotAvatarUrl());
-  const drewAvatar = drawPureImageAvatar(context, avatarImage, padding, 58, 116, accentColor);
-  if (!drewAvatar) {
-    setCanvasFont(context, fonts.badge.family, fonts.badge.size);
-    context.fillStyle = colors.text;
-    context.fillText(card.badge || 'BOT', padding + 24, 126);
-  }
-
-  drawCanvasLines(
-    context,
-    wrapCanvasText(measureContext, card.title || 'Voice Room Bot', fonts.title.family, fonts.title.size, contentWidth - 145),
-    padding + 145,
-    98,
-    fonts.title.family,
-    fonts.title.size,
-    fonts.title.lineHeight,
-    colors.text,
-    1
-  );
-
-  if (card.subtitle) {
-    drawCanvasLines(
-      context,
-      wrapCanvasText(measureContext, card.subtitle, fonts.subtitle.family, fonts.subtitle.size, contentWidth - 145),
-      padding + 145,
-      150,
-      fonts.subtitle.family,
-      fonts.subtitle.size,
-      fonts.subtitle.lineHeight,
-      colors.subtitle,
-      1
-    );
-  }
-
-  let cursorY = 206;
-  if (descriptionLines.length > 0) {
-    fillCanvasRoundedRect(context, padding, cursorY, contentWidth, descriptionHeight, 18, colors.panelSoft);
-    drawCanvasLines(context, descriptionLines, padding + 28, cursorY + 52, fonts.body.family, fonts.body.size, fonts.body.lineHeight, colors.text);
-    cursorY += descriptionHeight + 24;
-  }
-
-  for (const row of rows) {
-    fillCanvasRoundedRect(context, padding, cursorY, contentWidth, row.height, 18, colors.panel);
-    context.fillStyle = accentColor;
-    context.fillRect(padding, cursorY + 8, 10, row.height - 16);
-    drawCanvasLines(context, row.labelLines, padding + 28, cursorY + 46, fonts.label.family, fonts.label.size, fonts.label.lineHeight, colors.label);
-    const valueY = cursorY + 46 + (row.labelLines.length * fonts.label.lineHeight) + 22;
-    drawCanvasLines(context, row.valueLines, padding + 28, valueY, fonts.body.family, fonts.body.size, fonts.body.lineHeight, colors.text);
-    cursorY += row.height + 22;
-  }
-
-  const footerY = height - 34;
-  const footerLeft = card.footerLeft || card.footer || new Date().toLocaleString('en-GB');
-  const footerRight = card.footerRight || null;
-  setCanvasFont(context, fonts.footer.family, fonts.footer.size);
-  context.fillStyle = colors.muted;
+function cardFooterText(card) {
+  const parts = [];
+  const footerLeft = card.footerLeft || card.footer || null;
   if (footerLeft) {
-    context.fillText(cardText(footerLeft), padding, footerY);
+    parts.push(embedText(footerLeft));
   }
 
-  if (footerRight) {
-    const footerRightText = cardText(footerRight);
-    const footerRightWidth = measureCanvasText(context, footerRightText, fonts.footer.family, fonts.footer.size);
-    context.fillText(footerRightText, width - padding - footerRightWidth, footerY);
+  if (card.footerRight) {
+    parts.push(embedText(card.footerRight));
   }
 
-  return encodePureImagePng(pureImage, image);
+  return parts.filter(Boolean).join(' | ');
 }
 
-async function createPureImageHelpAttachment(card, slug = 'help') {
-  const image = await renderPureImageHelpCard(card);
-  if (!image) {
-    return null;
+function createCardEmbed(card) {
+  const titleText = truncateEmbedText(card.title || 'Voice Room Bot', 256);
+  const descriptionText = card.description ? truncateEmbedText(card.description, 4096) : null;
+  const footerText = cardFooterText(card);
+  const footerValue = footerText ? truncateEmbedText(footerText, 2048) : null;
+  const embed = new EmbedBuilder()
+    .setColor(cardColorInt(card.color))
+    .setTitle(titleText);
+  let remainingCharacters = 5900 - titleText.length - (descriptionText?.length || 0) - (footerValue?.length || 0);
+
+  const avatarUrl = getBotAvatarUrl();
+  const authorParts = [];
+  if (card.badge) {
+    authorParts.push(embedText(card.badge).slice(0, 24));
+  }
+  if (card.subtitle) {
+    authorParts.push(embedText(card.subtitle));
+  }
+  if (authorParts.length > 0) {
+    const authorName = truncateEmbedText(authorParts.join(' - '), 256);
+    remainingCharacters -= authorName.length;
+    const author = { name: authorName };
+    if (avatarUrl) {
+      author.iconURL = avatarUrl;
+    }
+    embed.setAuthor(author);
+  } else if (avatarUrl) {
+    embed.setThumbnail(avatarUrl);
   }
 
-  const safeSlug = slug.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'help';
-  return new AttachmentBuilder(image, {
-    name: `${safeSlug}-${Date.now()}.png`,
-  });
-}
+  if (descriptionText) {
+    embed.setDescription(descriptionText);
+  }
 
-function createCardAttachment(card, slug = 'voice-room-bot') {
-  const safeSlug = slug.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'voice-room-bot';
-  const systemImage = renderCardImage(card);
-  if (systemImage) {
-    return new AttachmentBuilder(systemImage, {
-      name: `${safeSlug}-${Date.now()}.png`,
+  const fields = [];
+  for (const field of (card.fields || []).filter((entry) => entry && (entry.name || entry.value))) {
+    if (fields.length >= 25 || remainingCharacters <= 8) {
+      break;
+    }
+
+    const progress = formatEmbedProgress(field.progress);
+    const valueParts = [embedText(field.value, '-')];
+    if (progress) {
+      valueParts.push(progress);
+    }
+
+    const name = truncateEmbedText(field.name, Math.min(256, Math.max(1, remainingCharacters - 2)));
+    const valueBudget = Math.min(1024, Math.max(1, remainingCharacters - name.length - 1));
+    const value = truncateEmbedText(valueParts.join('\n'), valueBudget);
+    fields.push({
+      name,
+      value,
+      inline: Boolean(field.inline),
     });
+    remainingCharacters -= name.length + value.length;
   }
 
-  const readableImage = renderReadableCardImage(card);
-  if (readableImage) {
-    return new AttachmentBuilder(readableImage.image, {
-      name: `${safeSlug}-${Date.now()}.${readableImage.extension}`,
-    });
+  if (fields.length > 0) {
+    embed.addFields(fields);
   }
 
-  throw new Error('Readable PNG card renderer failed to produce an image.');
-}
-
-function createReadableCardAttachment(card, slug = 'voice-room-bot') {
-  const image = renderCardImage(card);
-  if (!image) {
-    return null;
+  if (footerValue) {
+    embed.setFooter({ text: footerValue });
   }
 
-  const safeSlug = slug.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'voice-room-bot';
-  return new AttachmentBuilder(image, {
-    name: `${safeSlug}-${Date.now()}.png`,
-  });
+  if (card.showTimestamp !== false) {
+    embed.setTimestamp(new Date());
+  }
+
+  return embed;
 }
 
 function buildStatusCard(title, message, options = {}) {
@@ -3681,7 +3120,7 @@ function buildStatusCard(title, message, options = {}) {
         ? [254, 231, 92, 255]
         : cardTheme.accent);
 
-  return createCardAttachment({
+  return createCardEmbed({
     badge: options.badge || 'BOT',
     title,
     description: message,
@@ -3749,9 +3188,9 @@ async function sendModeratorAuditLog(guild, auditEntry) {
     fields: fields.slice(0, 10),
     footer: `Moderator ID: ${moderator.id}`,
   };
-  const attachment = createCardAttachment(auditCard, 'moderator-audit');
+  const attachment = createCardEmbed(auditCard, 'moderator-audit');
 
-  await logChannel.send({ files: [attachment] }).catch((error) => {
+  await logChannel.send({ embeds: [attachment] }).catch((error) => {
     console.warn(`Could not send moderator audit image in ${guild.name}:`, error);
   });
 }
@@ -3772,7 +3211,7 @@ function missingPermissionsFor(channel, botMember, permissionNames) {
 function buildSetupCheckCard(guild, botMember) {
   const categories = getConfiguredCategories(guild.id);
   if (categories.length === 0) {
-    return createCardAttachment({
+    return createCardEmbed({
       badge: 'CHK',
       title: 'Setup Health Check',
       description: 'No saved setups found. Run /setup to create one.',
@@ -3893,7 +3332,7 @@ function buildSetupCheckCard(guild, botMember) {
   });
 
   const color = issueCount > 0 ? [237, 66, 69, 255] : warningCount > 0 ? [254, 231, 92, 255] : [87, 242, 135, 255];
-  return createCardAttachment({
+  return createCardEmbed({
     badge: 'CHK',
     title: 'Setup Health Check',
     description: `${categories.length} setup(s) checked. ${issueCount} issue(s), ${warningCount} warning(s).`,
@@ -3904,12 +3343,12 @@ function buildSetupCheckCard(guild, botMember) {
 
 async function handleSetupCheckCommand(interaction) {
   if (!interaction.guild) {
-    await interaction.reply({ files: [buildStatusCard('Setup Health Check', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Setup Health Check', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
   if (!canManageSetup(interaction)) {
-    await interaction.reply({ files: [buildStatusCard('Setup Health Check', 'You need Manage Server, Manage Channels, the configured access role, or bot owner access to check setup health.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Setup Health Check', 'You need Manage Server, Manage Channels, the configured access role, or bot owner access to check setup health.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
@@ -3918,30 +3357,30 @@ async function handleSetupCheckCommand(interaction) {
   const botMember = interaction.guild.members.me || await interaction.guild.members.fetchMe().catch(() => null);
 
   if (!botMember) {
-    await interaction.editReply({ attachments: [], files: [buildStatusCard('Setup Health Check', 'I could not check my server permissions right now.', { type: 'error', badge: 'ERR' })] });
+    await interaction.editReply({ attachments: [], embeds: [buildStatusCard('Setup Health Check', 'I could not check my server permissions right now.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
   await interaction.editReply({
     attachments: [],
-    files: [buildSetupCheckCard(interaction.guild, botMember)],
+    embeds: [buildSetupCheckCard(interaction.guild, botMember)],
   });
 }
 
 async function handleSetupAutoCreateCommand(interaction) {
   if (!interaction.guild) {
-    await interaction.reply({ files: [buildStatusCard('Auto-create Setup', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Auto-create Setup', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
   if (!canManageSetup(interaction)) {
-    await interaction.reply({ files: [buildStatusCard('Auto-create Setup', 'You need Manage Server, Manage Channels, the configured access role, or bot owner access to change auto-create settings.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Auto-create Setup', 'You need Manage Server, Manage Channels, the configured access role, or bot owner access to change auto-create settings.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
   const requestChannel = interaction.options.getChannel('request-channel');
   if (!requestChannel || requestChannel.type !== ChannelType.GuildVoice) {
-    await interaction.reply({ files: [buildStatusCard('Auto-create Setup', 'Choose the request voice channel for an existing setup.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Auto-create Setup', 'Choose the request voice channel for an existing setup.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
@@ -3952,7 +3391,7 @@ async function handleSetupAutoCreateCommand(interaction) {
   );
 
   if (!existingCategory) {
-    await interaction.reply({ files: [buildStatusCard('Auto-create Setup', 'I could not find a saved setup for that request channel. Run /setup first.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Auto-create Setup', 'I could not find a saved setup for that request channel. Run /setup first.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
@@ -3965,7 +3404,7 @@ async function handleSetupAutoCreateCommand(interaction) {
   );
 
   if (!updatedCategory) {
-    await interaction.reply({ files: [buildStatusCard('Auto-create Setup', 'I could not update that setup.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Auto-create Setup', 'I could not update that setup.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
@@ -3973,7 +3412,7 @@ async function handleSetupAutoCreateCommand(interaction) {
   const { totalManagedChannels, availableChannels, archiveChannels } = getSetupPoolCounts(updatedCategory, interaction.guild);
 
   await interaction.reply({
-    files: [buildStatusCard('Auto-create Setup', `Auto-create is now ${updatedCategory.autoCreateArchiveRooms ? 'enabled' : 'disabled'} for ${updatedCategory.name}.`, {
+    embeds: [buildStatusCard('Auto-create Setup', `Auto-create is now ${updatedCategory.autoCreateArchiveRooms ? 'enabled' : 'disabled'} for ${updatedCategory.name}.`, {
       type: 'success',
       badge: 'SET',
       fields: [
@@ -4245,18 +3684,16 @@ async function buildHelpMessagePayload(interaction, page = 'general') {
     footerRight: `Requested by ${formatHelpRequester(interaction)}`,
     timestampPlacement: 'footer',
   };
-  const attachment = createReadableCardAttachment(helpCard, `help-${activePage}`) ||
-    createCardAttachment(helpCard, `help-${activePage}`);
+  const embed = createCardEmbed(helpCard);
 
   return {
-    files: [attachment],
-    embeds: [],
+    embeds: [embed],
   };
 }
 
 async function handleHelpCommand(interaction) {
   if (!interaction.guild) {
-    await interaction.reply({ files: [buildStatusCard('Help', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Help', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
@@ -4274,7 +3711,7 @@ async function handleHelpPageSelect(interaction) {
   if (interaction.user.id !== ownerId) {
     await interaction.deferReply({ ephemeral: true });
     await interaction.editReply({
-      files: [buildStatusCard('Help', 'Only the user who opened this help menu can change pages.', { type: 'error', badge: 'ERR' })],
+      embeds: [buildStatusCard('Help', 'Only the user who opened this help menu can change pages.', { type: 'error', badge: 'ERR' })],
     });
     return;
   }
@@ -4282,7 +3719,7 @@ async function handleHelpPageSelect(interaction) {
   if (!interaction.guild) {
     await interaction.deferReply({ ephemeral: true });
     await interaction.editReply({
-      files: [buildStatusCard('Help', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })],
+      embeds: [buildStatusCard('Help', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })],
     });
     return;
   }
@@ -4299,7 +3736,7 @@ async function handleHelpPageSelect(interaction) {
 
 async function handleRoomsCommand(interaction) {
   if (!interaction.guild) {
-    await interaction.reply({ files: [buildStatusCard('Voice Rooms', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Voice Rooms', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
@@ -4308,19 +3745,19 @@ async function handleRoomsCommand(interaction) {
 
   await interaction.editReply({
     attachments: [],
-    files: [buildRoomsCard(interaction.guild)],
+    embeds: [buildRoomsCard(interaction.guild)],
   });
 }
 
 async function handleTopHostsCommand(interaction) {
   if (!interaction.guild) {
-    await interaction.reply({ files: [buildStatusCard('Top Hosts', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Top Hosts', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
   if (!canViewTopHosts(interaction)) {
     await interaction.reply({
-      files: [buildStatusCard('Top Hosts', 'You need Manage Server, Manage Channels, the configured access role, or bot owner access to view top voice room hosts.', { type: 'error', badge: 'ERR' })],
+      embeds: [buildStatusCard('Top Hosts', 'You need Manage Server, Manage Channels, the configured access role, or bot owner access to view top voice room hosts.', { type: 'error', badge: 'ERR' })],
     });
     return;
   }
@@ -4331,13 +3768,13 @@ async function handleTopHostsCommand(interaction) {
 
   await interaction.editReply({
     attachments: [],
-    files: [await buildTopHostsCard(interaction.guild, limit)],
+    embeds: [await buildTopHostsCard(interaction.guild, limit)],
   });
 }
 
 async function handleHostProfileCommand(interaction) {
   if (!interaction.guild) {
-    await interaction.reply({ files: [buildStatusCard('Host Profile', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Host Profile', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
@@ -4345,13 +3782,13 @@ async function handleHostProfileCommand(interaction) {
   await interaction.deferReply();
   await interaction.editReply({
     attachments: [],
-    files: [await buildHostProfileCard(interaction.guild, requestedUser.id)],
+    embeds: [await buildHostProfileCard(interaction.guild, requestedUser.id)],
   });
 }
 
 async function handleTopMembersCommand(interaction) {
   if (!interaction.guild) {
-    await interaction.reply({ files: [buildStatusCard('Top Members', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Top Members', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
@@ -4361,13 +3798,13 @@ async function handleTopMembersCommand(interaction) {
 
   await interaction.editReply({
     attachments: [],
-    files: [await buildTopMembersCard(interaction.guild, limit)],
+    embeds: [await buildTopMembersCard(interaction.guild, limit)],
   });
 }
 
 async function handleVoiceProfileCommand(interaction) {
   if (!interaction.guild) {
-    await interaction.reply({ files: [buildStatusCard('Voice Member Profile', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Voice Member Profile', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
@@ -4375,7 +3812,7 @@ async function handleVoiceProfileCommand(interaction) {
   await interaction.deferReply();
   await interaction.editReply({
     attachments: [],
-    files: [await buildVoiceProfileCard(interaction.guild, requestedUser.id)],
+    embeds: [await buildVoiceProfileCard(interaction.guild, requestedUser.id)],
   });
 }
 
@@ -4435,7 +3872,7 @@ function buildXpRolesSyncCard(summary, options = {}) {
     });
   }
 
-  return createCardAttachment({
+  return createCardEmbed({
     badge: 'XP',
     title: 'XP Rank Roles Synced',
     description: 'Rank roles use the existing XP rank names. Create Discord roles with those exact names to enable rewards.',
@@ -4446,13 +3883,13 @@ function buildXpRolesSyncCard(summary, options = {}) {
 
 async function handleXpRolesCommand(interaction) {
   if (!interaction.guild) {
-    await interaction.reply({ files: [buildStatusCard('XP Rank Roles', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('XP Rank Roles', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
   if (!canManageXpRoles(interaction)) {
     await interaction.reply({
-      files: [buildStatusCard('XP Rank Roles', 'You need Manage Server, Manage Channels, the configured access role, or bot owner access to sync XP rank roles.', { type: 'error', badge: 'ERR' })],
+      embeds: [buildStatusCard('XP Rank Roles', 'You need Manage Server, Manage Channels, the configured access role, or bot owner access to sync XP rank roles.', { type: 'error', badge: 'ERR' })],
     });
     return;
   }
@@ -4467,7 +3904,7 @@ async function handleXpRolesCommand(interaction) {
   if (requestedUser && !requestedMember) {
     await interaction.editReply({
       attachments: [],
-      files: [buildStatusCard('XP Rank Roles', 'I could not find that member in this server.', { type: 'error', badge: 'ERR' })],
+      embeds: [buildStatusCard('XP Rank Roles', 'I could not find that member in this server.', { type: 'error', badge: 'ERR' })],
     });
     return;
   }
@@ -4475,19 +3912,19 @@ async function handleXpRolesCommand(interaction) {
   const summary = await syncKnownXpRankRoles(interaction.guild, requestedMember);
   await interaction.editReply({
     attachments: [],
-    files: [buildXpRolesSyncCard(summary, { member: requestedMember })],
+    embeds: [buildXpRolesSyncCard(summary, { member: requestedMember })],
   });
 }
 
 async function handleAccessRoleCommand(interaction) {
   if (!interaction.guild) {
-    await interaction.reply({ files: [buildStatusCard('Access Role', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Access Role', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
   if (!canConfigureAccessRole(interaction)) {
     await interaction.reply({
-      files: [buildStatusCard('Access Role', 'You need Manage Server, Manage Channels, or bot owner access to change the bot access role.', { type: 'error', badge: 'ERR' })],
+      embeds: [buildStatusCard('Access Role', 'You need Manage Server, Manage Channels, or bot owner access to change the bot access role.', { type: 'error', badge: 'ERR' })],
     });
     return;
   }
@@ -4498,7 +3935,7 @@ async function handleAccessRoleCommand(interaction) {
 
   if (requestedRole && shouldClear) {
     await interaction.reply({
-      files: [buildStatusCard('Access Role', 'Choose a role or use clear:true, not both.', { type: 'error', badge: 'ERR' })],
+      embeds: [buildStatusCard('Access Role', 'Choose a role or use clear:true, not both.', { type: 'error', badge: 'ERR' })],
     });
     return;
   }
@@ -4506,7 +3943,7 @@ async function handleAccessRoleCommand(interaction) {
   if (shouldClear) {
     saveCommandAccessRole(interaction.guild.id, null, interaction.user.id);
     await interaction.reply({
-      files: [buildStatusCard('Access Role', 'Cleared the bot access role. Built-in Discord permissions are now required again.', { type: 'success', badge: 'ROLE' })],
+      embeds: [buildStatusCard('Access Role', 'Cleared the bot access role. Built-in Discord permissions are now required again.', { type: 'success', badge: 'ROLE' })],
     });
     return;
   }
@@ -4514,20 +3951,20 @@ async function handleAccessRoleCommand(interaction) {
   if (requestedRole) {
     if (requestedRole.id === interaction.guild.id) {
       await interaction.reply({
-        files: [buildStatusCard('Access Role', 'Choose a specific role, not @everyone.', { type: 'error', badge: 'ERR' })],
+        embeds: [buildStatusCard('Access Role', 'Choose a specific role, not @everyone.', { type: 'error', badge: 'ERR' })],
       });
       return;
     }
 
     saveCommandAccessRole(interaction.guild.id, requestedRole.id, interaction.user.id);
     await interaction.reply({
-      files: [buildStatusCard('Access Role', `${requestedRole} can now use bot admin and moderator commands.`, { type: 'success', badge: 'ROLE' })],
+      embeds: [buildStatusCard('Access Role', `${requestedRole} can now use bot admin and moderator commands.`, { type: 'success', badge: 'ROLE' })],
     });
     return;
   }
 
   await interaction.reply({
-    files: [buildStatusCard('Access Role', currentRoleId
+    embeds: [buildStatusCard('Access Role', currentRoleId
       ? `Current bot access role: <@&${currentRoleId}>.`
       : 'No bot access role is configured yet.', {
       badge: 'ROLE',
@@ -4582,13 +4019,13 @@ async function buildLogStatusFields(guild, voiceSettings, moderatorSettings) {
 
 async function handleLogsCommand(interaction) {
   if (!interaction.guild) {
-    await interaction.reply({ files: [buildStatusCard('Logging', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Logging', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
   if (!canManageLogs(interaction)) {
     await interaction.reply({
-      files: [buildStatusCard('Logging', 'You need Manage Server, Manage Channels, Moderate Members, the configured access role, or bot owner access to change logging settings.', { type: 'error', badge: 'ERR' })],
+      embeds: [buildStatusCard('Logging', 'You need Manage Server, Manage Channels, Moderate Members, the configured access role, or bot owner access to change logging settings.', { type: 'error', badge: 'ERR' })],
     });
     return;
   }
@@ -4604,7 +4041,7 @@ async function handleLogsCommand(interaction) {
 
   if (!voiceRequested && !moderatorRequested) {
     await interaction.reply({
-      files: [buildStatusCard('Logging', 'Current Discord log channels.', {
+      embeds: [buildStatusCard('Logging', 'Current Discord log channels.', {
         badge: 'LOG',
         fields: await buildLogStatusFields(interaction.guild, currentVoiceSettings, currentModeratorSettings),
       })],
@@ -4613,12 +4050,12 @@ async function handleLogsCommand(interaction) {
   }
 
   if (requestedChannel && requestedChannel.type !== ChannelType.GuildText) {
-    await interaction.reply({ files: [buildStatusCard('Logging', 'Choose a normal text channel for voice logs.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Logging', 'Choose a normal text channel for voice logs.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
   if (requestedModeratorChannel && requestedModeratorChannel.type !== ChannelType.GuildText) {
-    await interaction.reply({ files: [buildStatusCard('Logging', 'Choose a normal text channel for moderator command logs.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Logging', 'Choose a normal text channel for moderator command logs.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
@@ -4630,12 +4067,12 @@ async function handleLogsCommand(interaction) {
     : requestedModeratorEnabled;
 
   if (voiceRequested && nextVoiceEnabled && !nextVoiceChannelId) {
-    await interaction.reply({ files: [buildStatusCard('Logging', 'Choose a text channel before enabling voice logs.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Logging', 'Choose a text channel before enabling voice logs.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
   if (moderatorRequested && nextModeratorEnabled && !nextModeratorChannelId) {
-    await interaction.reply({ files: [buildStatusCard('Logging', 'Choose a text channel before enabling moderator command logs.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Logging', 'Choose a text channel before enabling moderator command logs.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
@@ -4643,7 +4080,7 @@ async function handleLogsCommand(interaction) {
   if (voiceRequested && nextVoiceEnabled) {
     const logChannel = await getVoiceLogChannel(interaction.guild, nextVoiceChannelId);
     if (!logChannel || logChannel.type !== ChannelType.GuildText) {
-      await interaction.reply({ files: [buildStatusCard('Logging', 'I could not find the saved voice log channel. Choose a text channel with /logs channel:#channel.', { type: 'error', badge: 'ERR' })] });
+      await interaction.reply({ embeds: [buildStatusCard('Logging', 'I could not find the saved voice log channel. Choose a text channel with /logs channel:#channel.', { type: 'error', badge: 'ERR' })] });
       return;
     }
     channelsToCheck.push({ channel: logChannel, label: 'voice logs' });
@@ -4652,7 +4089,7 @@ async function handleLogsCommand(interaction) {
   if (moderatorRequested && nextModeratorEnabled) {
     const logChannel = await getVoiceLogChannel(interaction.guild, nextModeratorChannelId);
     if (!logChannel || logChannel.type !== ChannelType.GuildText) {
-      await interaction.reply({ files: [buildStatusCard('Logging', 'I could not find the saved moderator log channel. Choose a text channel with /logs moderator-channel:#channel.', { type: 'error', badge: 'ERR' })] });
+      await interaction.reply({ embeds: [buildStatusCard('Logging', 'I could not find the saved moderator log channel. Choose a text channel with /logs moderator-channel:#channel.', { type: 'error', badge: 'ERR' })] });
       return;
     }
     channelsToCheck.push({ channel: logChannel, label: 'moderator command logs' });
@@ -4661,7 +4098,7 @@ async function handleLogsCommand(interaction) {
   if (channelsToCheck.length > 0) {
     const botMember = interaction.guild.members.me || await interaction.guild.members.fetchMe().catch(() => null);
     if (!botMember) {
-      await interaction.reply({ files: [buildStatusCard('Logging', 'I could not check my permissions for that log channel right now.', { type: 'error', badge: 'ERR' })] });
+      await interaction.reply({ embeds: [buildStatusCard('Logging', 'I could not check my permissions for that log channel right now.', { type: 'error', badge: 'ERR' })] });
       return;
     }
 
@@ -4669,7 +4106,7 @@ async function handleLogsCommand(interaction) {
       const missingPermissions = missingPermissionsFor(channel, botMember, voiceLogPermissionNames);
       if (missingPermissions.length > 0) {
         await interaction.reply({
-          files: [buildStatusCard('Logging', `I need ${formatPermissionNames(missingPermissions)} in ${channel} before I can send ${label} there.`, { type: 'error', badge: 'ERR' })],
+          embeds: [buildStatusCard('Logging', `I need ${formatPermissionNames(missingPermissions)} in ${channel} before I can send ${label} there.`, { type: 'error', badge: 'ERR' })],
         });
         return;
       }
@@ -4692,7 +4129,7 @@ async function handleLogsCommand(interaction) {
     : currentModeratorSettings;
 
   await interaction.reply({
-    files: [buildStatusCard('Logging', 'Logging settings updated.', {
+    embeds: [buildStatusCard('Logging', 'Logging settings updated.', {
       type: updatedVoiceSettings.enabled || updatedModeratorSettings.enabled ? 'success' : 'warning',
       badge: 'LOG',
       fields: await buildLogStatusFields(interaction.guild, updatedVoiceSettings, updatedModeratorSettings),
@@ -4825,7 +4262,7 @@ async function closeManagedVoiceRoom(voiceChannel) {
 }
 
 function buildModRoomHelpCard() {
-  return createCardAttachment({
+  return createCardEmbed({
     badge: 'MR',
     title: '/mr Moderator Room Commands',
     description: 'Moderator overrides only work on active voice rooms currently managed by this bot.',
@@ -4914,7 +4351,7 @@ function buildModeratorRoomHistoryCard(guild, entries, options = {}) {
     });
   }
 
-  return createCardAttachment({
+  return createCardEmbed({
     badge: 'HIS',
     title: 'Moderator Room History',
     description: filterChannel ? `Filtered to ${filterChannel.name}.` : 'Latest moderator room actions and notes.',
@@ -4929,27 +4366,27 @@ function normalizeModeratorNoteText(value) {
 
 async function handleModRoomCommand(interaction) {
   if (!interaction.guild) {
-    await interaction.reply({ files: [buildStatusCard('Moderator Room Override', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Moderator Room Override', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
   if (!canUseModeratorOverride(interaction)) {
     await interaction.reply({
-      files: [buildStatusCard('Moderator Room Override', 'You need Manage Server, Manage Channels, Moderate Members, the configured access role, or bot owner access to use moderator room overrides.', { type: 'error', badge: 'ERR' })],
+      embeds: [buildStatusCard('Moderator Room Override', 'You need Manage Server, Manage Channels, Moderate Members, the configured access role, or bot owner access to use moderator room overrides.', { type: 'error', badge: 'ERR' })],
     });
     return;
   }
 
   const subcommand = interaction.options.getSubcommand();
   if (subcommand === 'help') {
-    await interaction.reply({ files: [buildModRoomHelpCard()] });
+    await interaction.reply({ embeds: [buildModRoomHelpCard()] });
     return;
   }
 
   if (subcommand === 'history') {
     const filterChannel = interaction.options.getChannel('channel');
     if (filterChannel && filterChannel.type !== ChannelType.GuildVoice) {
-      await interaction.reply({ files: [buildStatusCard('Moderator Room History', 'Choose a voice channel to filter history.', { type: 'error', badge: 'ERR' })] });
+      await interaction.reply({ embeds: [buildStatusCard('Moderator Room History', 'Choose a voice channel to filter history.', { type: 'error', badge: 'ERR' })] });
       return;
     }
 
@@ -4960,7 +4397,7 @@ async function handleModRoomCommand(interaction) {
     });
 
     await interaction.reply({
-      files: [buildModeratorRoomHistoryCard(interaction.guild, entries, { channel: filterChannel })],
+      embeds: [buildModeratorRoomHistoryCard(interaction.guild, entries, { channel: filterChannel })],
     });
     return;
   }
@@ -4969,7 +4406,7 @@ async function handleModRoomCommand(interaction) {
     ? await getSelectedManagedVoiceRoomById(interaction, interaction.options.getString('channel'))
     : getSelectedManagedVoiceRoom(interaction);
   if (!selectedRoom.ok) {
-    await interaction.reply({ files: [buildStatusCard('Moderator Room Override', selectedRoom.message, { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Moderator Room Override', selectedRoom.message, { type: 'error', badge: 'ERR' })] });
     return;
   }
 
@@ -4990,7 +4427,7 @@ async function handleModRoomCommand(interaction) {
       });
 
       if (!result.ok) {
-        await interaction.editReply({ attachments: [], files: [buildStatusCard('Moderator Room Override', result.message, { type: 'error', badge: 'ERR' })] });
+        await interaction.editReply({ attachments: [], embeds: [buildStatusCard('Moderator Room Override', result.message, { type: 'error', badge: 'ERR' })] });
         return;
       }
 
@@ -5010,14 +4447,14 @@ async function handleModRoomCommand(interaction) {
         ],
       });
 
-      await interaction.editReply({ attachments: [], files: [buildStatusCard('Moderator Room Override', `${result.targetMember} is now the owner of ${voiceChannel}.`, { type: 'success', badge: 'MR' })] });
+      await interaction.editReply({ attachments: [], embeds: [buildStatusCard('Moderator Room Override', `${result.targetMember} is now the owner of ${voiceChannel}.`, { type: 'success', badge: 'MR' })] });
       return;
     }
 
     if (subcommand === 'rename') {
       const requestedName = normalizeRoomName(interaction.options.getString('name') || '');
       if (requestedName.length < 1 || requestedName.length > 100) {
-        await interaction.editReply({ attachments: [], files: [buildStatusCard('Moderator Room Override', 'Room names must be between 1 and 100 characters.', { type: 'error', badge: 'ERR' })] });
+        await interaction.editReply({ attachments: [], embeds: [buildStatusCard('Moderator Room Override', 'Room names must be between 1 and 100 characters.', { type: 'error', badge: 'ERR' })] });
         return;
       }
 
@@ -5032,7 +4469,7 @@ async function handleModRoomCommand(interaction) {
           { name: 'New name', value: requestedName, inline: true },
         ],
       });
-      await interaction.editReply({ attachments: [], files: [buildStatusCard('Moderator Room Override', `${voiceChannel} has been renamed to ${requestedName}.`, { type: 'success', badge: 'MR' })] });
+      await interaction.editReply({ attachments: [], embeds: [buildStatusCard('Moderator Room Override', `${voiceChannel} has been renamed to ${requestedName}.`, { type: 'success', badge: 'MR' })] });
       return;
     }
 
@@ -5049,7 +4486,7 @@ async function handleModRoomCommand(interaction) {
           { name: 'New limit', value: formatUserLimit(updatedChannel), inline: true },
         ],
       });
-      await interaction.editReply({ attachments: [], files: [buildStatusCard('Moderator Room Override', `${updatedChannel} now has a user limit of ${formatUserLimit(updatedChannel)}.`, { type: 'success', badge: 'MR' })] });
+      await interaction.editReply({ attachments: [], embeds: [buildStatusCard('Moderator Room Override', `${updatedChannel} now has a user limit of ${formatUserLimit(updatedChannel)}.`, { type: 'success', badge: 'MR' })] });
       return;
     }
 
@@ -5063,7 +4500,7 @@ async function handleModRoomCommand(interaction) {
           { name: 'Result', value: result.message, inline: false },
         ],
       });
-      await interaction.editReply({ attachments: [], files: [buildStatusCard('Moderator Room Override', result.message, { type: result.ok ? 'success' : 'warning', badge: 'MR' })] });
+      await interaction.editReply({ attachments: [], embeds: [buildStatusCard('Moderator Room Override', result.message, { type: result.ok ? 'success' : 'warning', badge: 'MR' })] });
       return;
     }
 
@@ -5081,14 +4518,14 @@ async function handleModRoomCommand(interaction) {
           ],
         });
       }
-      await interaction.editReply({ attachments: [], files: [buildStatusCard('Moderator Room Override', result.message, { type: result.ok ? 'success' : 'error', badge: result.ok ? 'MR' : 'ERR' })] });
+      await interaction.editReply({ attachments: [], embeds: [buildStatusCard('Moderator Room Override', result.message, { type: result.ok ? 'success' : 'error', badge: result.ok ? 'MR' : 'ERR' })] });
       return;
     }
 
     if (subcommand === 'note') {
       const note = normalizeModeratorNoteText(interaction.options.getString('note'));
       if (!note) {
-        await interaction.editReply({ attachments: [], files: [buildStatusCard('Moderator Room Override', 'Write a note before saving it.', { type: 'error', badge: 'ERR' })] });
+        await interaction.editReply({ attachments: [], embeds: [buildStatusCard('Moderator Room Override', 'Write a note before saving it.', { type: 'error', badge: 'ERR' })] });
         return;
       }
 
@@ -5101,14 +4538,14 @@ async function handleModRoomCommand(interaction) {
           { name: 'Note', value: note, inline: false },
         ],
       });
-      await interaction.editReply({ attachments: [], files: [buildStatusCard('Moderator Room Override', `Saved a moderator note for ${voiceChannel}.`, { type: 'success', badge: 'MR' })] });
+      await interaction.editReply({ attachments: [], embeds: [buildStatusCard('Moderator Room Override', `Saved a moderator note for ${voiceChannel}.`, { type: 'success', badge: 'MR' })] });
       return;
     }
 
-    await interaction.editReply({ attachments: [], files: [buildStatusCard('Moderator Room Override', 'That moderator override action is not supported.', { type: 'error', badge: 'ERR' })] });
+    await interaction.editReply({ attachments: [], embeds: [buildStatusCard('Moderator Room Override', 'That moderator override action is not supported.', { type: 'error', badge: 'ERR' })] });
   } catch (error) {
     console.error('Failed to run moderator room override:', error);
-    await interaction.editReply({ attachments: [], files: [buildStatusCard('Moderator Room Override', 'I could not complete that moderator override right now.', { type: 'error', badge: 'ERR' })] });
+    await interaction.editReply({ attachments: [], embeds: [buildStatusCard('Moderator Room Override', 'I could not complete that moderator override right now.', { type: 'error', badge: 'ERR' })] });
   }
 }
 
@@ -5174,24 +4611,24 @@ async function transferVoiceChannelOwnership({ guild, voiceChannel, actorMember,
 
 async function handleTransferOwnerCommand(interaction) {
   if (!interaction.guild) {
-    await interaction.reply({ files: [buildStatusCard('Transfer Ownership', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Transfer Ownership', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
   const memberVoiceChannel = interaction.member?.voice?.channel;
   if (!memberVoiceChannel) {
-    await interaction.reply({ files: [buildStatusCard('Transfer Ownership', 'Join your active voice room first, then use this command.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Transfer Ownership', 'Join your active voice room first, then use this command.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
   const ownerId = voiceChannelOwners.get(memberVoiceChannel.id);
   if (!ownerId) {
-    await interaction.reply({ files: [buildStatusCard('Transfer Ownership', 'This voice channel is no longer tracked by the bot.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Transfer Ownership', 'This voice channel is no longer tracked by the bot.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
   if (!canControlOwnedRoom(interaction, ownerId)) {
-    await interaction.reply({ files: [buildStatusCard('Transfer Ownership', 'Only the current room owner or bot access role can transfer ownership.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Transfer Ownership', 'Only the current room owner or bot access role can transfer ownership.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
@@ -5209,7 +4646,7 @@ async function handleTransferOwnerCommand(interaction) {
   });
 
   if (!result.ok) {
-    await interaction.editReply({ attachments: [], files: [buildStatusCard('Transfer Ownership', result.message, { type: 'error', badge: 'ERR' })] });
+    await interaction.editReply({ attachments: [], embeds: [buildStatusCard('Transfer Ownership', result.message, { type: 'error', badge: 'ERR' })] });
     return;
   }
 
@@ -5233,7 +4670,7 @@ async function handleTransferOwnerCommand(interaction) {
 
   await interaction.editReply({
     attachments: [],
-    files: [buildStatusCard('Transfer Ownership', `${result.targetMember} is now the owner of ${memberVoiceChannel}.`, { type: 'success', badge: 'OWN' })],
+    embeds: [buildStatusCard('Transfer Ownership', `${result.targetMember} is now the owner of ${memberVoiceChannel}.`, { type: 'success', badge: 'OWN' })],
   });
 }
 
@@ -5243,30 +4680,30 @@ function normalizeRoomName(name) {
 
 async function handleRenameRoomCommand(interaction) {
   if (!interaction.guild) {
-    await interaction.reply({ files: [buildStatusCard('Rename Room', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Rename Room', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
   const memberVoiceChannel = interaction.member?.voice?.channel;
   if (!memberVoiceChannel) {
-    await interaction.reply({ files: [buildStatusCard('Rename Room', 'Join your active voice room first, then use this command.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Rename Room', 'Join your active voice room first, then use this command.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
   const ownerId = voiceChannelOwners.get(memberVoiceChannel.id);
   if (!ownerId) {
-    await interaction.reply({ files: [buildStatusCard('Rename Room', 'This voice channel is no longer tracked by the bot.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Rename Room', 'This voice channel is no longer tracked by the bot.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
   if (!canControlOwnedRoom(interaction, ownerId)) {
-    await interaction.reply({ files: [buildStatusCard('Rename Room', 'Only the current room owner or bot access role can rename this voice room.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Rename Room', 'Only the current room owner or bot access role can rename this voice room.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
   const requestedName = normalizeRoomName(interaction.options.getString('name') || '');
   if (requestedName.length < 1 || requestedName.length > 100) {
-    await interaction.reply({ files: [buildStatusCard('Rename Room', 'Room names must be between 1 and 100 characters.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Rename Room', 'Room names must be between 1 and 100 characters.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
@@ -5294,10 +4731,10 @@ async function handleRenameRoomCommand(interaction) {
       });
     }
 
-    await interaction.editReply({ attachments: [], files: [buildStatusCard('Rename Room', `${memberVoiceChannel} has been renamed to ${requestedName}.`, { type: 'success', badge: 'REN' })] });
+    await interaction.editReply({ attachments: [], embeds: [buildStatusCard('Rename Room', `${memberVoiceChannel} has been renamed to ${requestedName}.`, { type: 'success', badge: 'REN' })] });
   } catch (error) {
     console.error('Failed to rename voice room:', error);
-    await interaction.editReply({ attachments: [], files: [buildStatusCard('Rename Room', 'I could not rename that voice room right now.', { type: 'error', badge: 'ERR' })] });
+    await interaction.editReply({ attachments: [], embeds: [buildStatusCard('Rename Room', 'I could not rename that voice room right now.', { type: 'error', badge: 'ERR' })] });
   }
 }
 
@@ -5305,24 +4742,24 @@ async function handleTransferOwnerSelect(interaction) {
   const [, voiceChannelId] = interaction.customId.split(':');
 
   if (!interaction.guild) {
-    await interaction.reply({ files: [buildStatusCard('Transfer Ownership', 'Run ownership transfer inside a server.', { type: 'error', badge: 'ERR' })], ephemeral: true });
+    await interaction.reply({ embeds: [buildStatusCard('Transfer Ownership', 'Run ownership transfer inside a server.', { type: 'error', badge: 'ERR' })], ephemeral: true });
     return;
   }
 
   const ownerId = voiceChannelOwners.get(voiceChannelId);
   if (!ownerId) {
-    await interaction.reply({ files: [buildStatusCard('Transfer Ownership', 'This voice channel is no longer tracked by the bot.', { type: 'error', badge: 'ERR' })], ephemeral: true });
+    await interaction.reply({ embeds: [buildStatusCard('Transfer Ownership', 'This voice channel is no longer tracked by the bot.', { type: 'error', badge: 'ERR' })], ephemeral: true });
     return;
   }
 
   if (!canControlOwnedRoom(interaction, ownerId)) {
-    await interaction.reply({ files: [buildStatusCard('Transfer Ownership', 'Only the current room owner or bot access role can use this transfer menu.', { type: 'error', badge: 'ERR' })], ephemeral: true });
+    await interaction.reply({ embeds: [buildStatusCard('Transfer Ownership', 'Only the current room owner or bot access role can use this transfer menu.', { type: 'error', badge: 'ERR' })], ephemeral: true });
     return;
   }
 
   const voiceChannel = interaction.guild.channels.cache.get(voiceChannelId);
   if (!voiceChannel || voiceChannel.type !== ChannelType.GuildVoice) {
-    await interaction.reply({ files: [buildStatusCard('Transfer Ownership', 'That voice channel could not be found.', { type: 'error', badge: 'ERR' })], ephemeral: true });
+    await interaction.reply({ embeds: [buildStatusCard('Transfer Ownership', 'That voice channel could not be found.', { type: 'error', badge: 'ERR' })], ephemeral: true });
     return;
   }
 
@@ -5339,7 +4776,7 @@ async function handleTransferOwnerSelect(interaction) {
   });
 
   if (!result.ok) {
-    await interaction.editReply({ attachments: [], files: [buildStatusCard('Transfer Ownership', result.message, { type: 'error', badge: 'ERR' })] });
+    await interaction.editReply({ attachments: [], embeds: [buildStatusCard('Transfer Ownership', result.message, { type: 'error', badge: 'ERR' })] });
     return;
   }
 
@@ -5363,7 +4800,7 @@ async function handleTransferOwnerSelect(interaction) {
 
   await interaction.editReply({
     attachments: [],
-    files: [buildStatusCard('Transfer Ownership', `${result.targetMember} is now the owner of ${voiceChannel}.`, { type: 'success', badge: 'OWN' })],
+    embeds: [buildStatusCard('Transfer Ownership', `${result.targetMember} is now the owner of ${voiceChannel}.`, { type: 'success', badge: 'OWN' })],
   });
 }
 
@@ -5483,7 +4920,7 @@ function buildSetupCard(guild, session, status = null) {
     255,
   ];
 
-  return createCardAttachment({
+  return createCardEmbed({
     badge: 'SET',
     title: 'Voice Room Setup',
     description: status?.message || 'Choose the request voice channel, active category, and archive category. The setup saves when all three are selected.',
@@ -5555,12 +4992,12 @@ function validateSetupSession(guild, session) {
 
 async function handleSetupCommand(interaction) {
   if (!interaction.guild) {
-    await interaction.reply({ files: [buildStatusCard('Voice Room Setup', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Voice Room Setup', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
   if (!canManageSetup(interaction)) {
-    await interaction.reply({ files: [buildStatusCard('Voice Room Setup', 'You need Manage Server, Manage Channels, the configured access role, or bot owner access to run setup.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Voice Room Setup', 'You need Manage Server, Manage Channels, the configured access role, or bot owner access to run setup.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
@@ -5578,7 +5015,7 @@ async function handleSetupCommand(interaction) {
 
   await interaction.editReply({
     attachments: [],
-    files: [buildSetupCard(interaction.guild, session)],
+    embeds: [buildSetupCard(interaction.guild, session)],
     components: buildSetupComponents(interaction.user.id),
   });
 }
@@ -5587,24 +5024,24 @@ async function handleSetupSelect(interaction) {
   const [, field, ownerId] = interaction.customId.split(':');
 
   if (interaction.user.id !== ownerId) {
-    await interaction.reply({ files: [buildStatusCard('Voice Room Setup', 'Only the admin who opened this setup menu can use it.', { type: 'error', badge: 'ERR' })], ephemeral: true });
+    await interaction.reply({ embeds: [buildStatusCard('Voice Room Setup', 'Only the admin who opened this setup menu can use it.', { type: 'error', badge: 'ERR' })], ephemeral: true });
     return;
   }
 
   if (!interaction.guild) {
-    await interaction.reply({ files: [buildStatusCard('Voice Room Setup', 'Run setup inside a server.', { type: 'error', badge: 'ERR' })], ephemeral: true });
+    await interaction.reply({ embeds: [buildStatusCard('Voice Room Setup', 'Run setup inside a server.', { type: 'error', badge: 'ERR' })], ephemeral: true });
     return;
   }
 
   if (!canManageSetup(interaction)) {
-    await interaction.reply({ files: [buildStatusCard('Voice Room Setup', 'You need Manage Server, Manage Channels, the configured access role, or bot owner access to change setup.', { type: 'error', badge: 'ERR' })], ephemeral: true });
+    await interaction.reply({ embeds: [buildStatusCard('Voice Room Setup', 'You need Manage Server, Manage Channels, the configured access role, or bot owner access to change setup.', { type: 'error', badge: 'ERR' })], ephemeral: true });
     return;
   }
 
   const key = setupSessionKey(interaction.guild.id, interaction.user.id);
   const session = setupSessions.get(key);
   if (!session) {
-    await interaction.reply({ files: [buildStatusCard('Voice Room Setup', 'That setup menu expired. Run /setup again.', { type: 'warning', badge: 'SET' })], ephemeral: true });
+    await interaction.reply({ embeds: [buildStatusCard('Voice Room Setup', 'That setup menu expired. Run /setup again.', { type: 'warning', badge: 'SET' })], ephemeral: true });
     return;
   }
 
@@ -5627,7 +5064,7 @@ async function handleSetupSelect(interaction) {
   if (validationError) {
     await interaction.editReply({
       attachments: [],
-      files: [
+      embeds: [
         buildSetupCard(interaction.guild, session, {
           color: 0xed4245,
           message: validationError,
@@ -5641,7 +5078,7 @@ async function handleSetupSelect(interaction) {
   if (!isComplete) {
     await interaction.editReply({
       attachments: [],
-      files: [buildSetupCard(interaction.guild, session)],
+      embeds: [buildSetupCard(interaction.guild, session)],
       components: buildSetupComponents(interaction.user.id),
     });
     return;
@@ -5661,7 +5098,7 @@ async function handleSetupSelect(interaction) {
 
   await interaction.editReply({
     attachments: [],
-    files: [
+    embeds: [
       buildSetupCard(interaction.guild, savedCategory, {
         color: 0x57f287,
         message: 'Setup saved. Members who join the request voice channel will now receive an archived room automatically.',
@@ -5673,12 +5110,12 @@ async function handleSetupSelect(interaction) {
 
 async function handleSetupListCommand(interaction) {
   if (!interaction.guild) {
-    await interaction.reply({ files: [buildStatusCard('Saved Voice Room Setups', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Saved Voice Room Setups', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
   if (!canManageSetup(interaction)) {
-    await interaction.reply({ files: [buildStatusCard('Saved Voice Room Setups', 'You need Manage Server, Manage Channels, the configured access role, or bot owner access to view setup.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Saved Voice Room Setups', 'You need Manage Server, Manage Channels, the configured access role, or bot owner access to view setup.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
@@ -5687,7 +5124,7 @@ async function handleSetupListCommand(interaction) {
 
   const categories = getConfiguredCategories(interaction.guild.id);
   if (categories.length === 0) {
-    await interaction.editReply({ attachments: [], files: [buildStatusCard('Saved Voice Room Setups', 'No voice room setups are saved yet. Run /setup to add one.', { type: 'warning', badge: 'SET' })] });
+    await interaction.editReply({ attachments: [], embeds: [buildStatusCard('Saved Voice Room Setups', 'No voice room setups are saved yet. Run /setup to add one.', { type: 'warning', badge: 'SET' })] });
     return;
   }
 
@@ -5703,7 +5140,7 @@ async function handleSetupListCommand(interaction) {
 
   await interaction.editReply({
     attachments: [],
-    files: [createCardAttachment({
+    embeds: [createCardEmbed({
       badge: 'LST',
       title: 'Saved Voice Room Setups',
       description: `${categories.length} setup(s) saved for this server.`,
@@ -5721,12 +5158,12 @@ function truncateOptionText(text, maxLength) {
 
 async function handleSetupRemoveCommand(interaction) {
   if (!interaction.guild) {
-    await interaction.reply({ files: [buildStatusCard('Remove Voice Room Setup', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Remove Voice Room Setup', 'Run this command inside a server.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
   if (!canManageSetup(interaction)) {
-    await interaction.reply({ files: [buildStatusCard('Remove Voice Room Setup', 'You need Manage Server, Manage Channels, the configured access role, or bot owner access to remove setup.', { type: 'error', badge: 'ERR' })] });
+    await interaction.reply({ embeds: [buildStatusCard('Remove Voice Room Setup', 'You need Manage Server, Manage Channels, the configured access role, or bot owner access to remove setup.', { type: 'error', badge: 'ERR' })] });
     return;
   }
 
@@ -5735,7 +5172,7 @@ async function handleSetupRemoveCommand(interaction) {
 
   const categories = getConfiguredCategories(interaction.guild.id);
   if (categories.length === 0) {
-    await interaction.editReply({ attachments: [], files: [buildStatusCard('Remove Voice Room Setup', 'No voice room setups are saved yet.', { type: 'warning', badge: 'SET' })] });
+    await interaction.editReply({ attachments: [], embeds: [buildStatusCard('Remove Voice Room Setup', 'No voice room setups are saved yet.', { type: 'warning', badge: 'SET' })] });
     return;
   }
 
@@ -5752,7 +5189,7 @@ async function handleSetupRemoveCommand(interaction) {
 
   await interaction.editReply({
     attachments: [],
-    files: [createCardAttachment({
+    embeds: [createCardEmbed({
       badge: 'DEL',
       title: 'Remove Voice Room Setup',
       description: 'Choose the request channel setup to remove. Active occupied rooms should be emptied before removing a setup.',
@@ -5766,17 +5203,17 @@ async function handleSetupRemoveSelect(interaction) {
   const [, ownerId] = interaction.customId.split(':');
 
   if (interaction.user.id !== ownerId) {
-    await interaction.reply({ files: [buildStatusCard('Remove Voice Room Setup', 'Only the admin who opened this remove menu can use it.', { type: 'error', badge: 'ERR' })], ephemeral: true });
+    await interaction.reply({ embeds: [buildStatusCard('Remove Voice Room Setup', 'Only the admin who opened this remove menu can use it.', { type: 'error', badge: 'ERR' })], ephemeral: true });
     return;
   }
 
   if (!interaction.guild) {
-    await interaction.reply({ files: [buildStatusCard('Remove Voice Room Setup', 'Run setup removal inside a server.', { type: 'error', badge: 'ERR' })], ephemeral: true });
+    await interaction.reply({ embeds: [buildStatusCard('Remove Voice Room Setup', 'Run setup removal inside a server.', { type: 'error', badge: 'ERR' })], ephemeral: true });
     return;
   }
 
   if (!canManageSetup(interaction)) {
-    await interaction.reply({ files: [buildStatusCard('Remove Voice Room Setup', 'You need Manage Server, Manage Channels, the configured access role, or bot owner access to remove setup.', { type: 'error', badge: 'ERR' })], ephemeral: true });
+    await interaction.reply({ embeds: [buildStatusCard('Remove Voice Room Setup', 'You need Manage Server, Manage Channels, the configured access role, or bot owner access to remove setup.', { type: 'error', badge: 'ERR' })], ephemeral: true });
     return;
   }
 
@@ -5787,7 +5224,7 @@ async function handleSetupRemoveSelect(interaction) {
   if (!category) {
     await interaction.editReply({
       attachments: [],
-      files: [buildStatusCard('Remove Voice Room Setup', 'That setup has already been removed.', { type: 'warning', badge: 'SET' })],
+      embeds: [buildStatusCard('Remove Voice Room Setup', 'That setup has already been removed.', { type: 'warning', badge: 'SET' })],
       components: [],
     });
     return;
@@ -5800,7 +5237,7 @@ async function handleSetupRemoveSelect(interaction) {
   if (hasActiveRooms) {
     await interaction.editReply({
       attachments: [],
-      files: [buildStatusCard('Remove Voice Room Setup', 'That setup still has active saved rooms. Empty those rooms first, then remove the setup.', { type: 'warning', badge: 'SET' })],
+      embeds: [buildStatusCard('Remove Voice Room Setup', 'That setup still has active saved rooms. Empty those rooms first, then remove the setup.', { type: 'warning', badge: 'SET' })],
       components: [],
     });
     return;
@@ -5811,7 +5248,7 @@ async function handleSetupRemoveSelect(interaction) {
 
   await interaction.editReply({
     attachments: [],
-    files: [buildStatusCard('Remove Voice Room Setup', `Removed setup for ${removedCategory ? channelLabel(interaction.guild, removedCategory.requestChannelId) : 'that request channel'}.`, { type: 'success', badge: 'SET' })],
+    embeds: [buildStatusCard('Remove Voice Room Setup', `Removed setup for ${removedCategory ? channelLabel(interaction.guild, removedCategory.requestChannelId) : 'that request channel'}.`, { type: 'success', badge: 'SET' })],
     components: [],
   });
 }
@@ -5900,21 +5337,21 @@ async function respondToInteractionError(interaction, message) {
   try {
     if (interaction.deferred && !interaction.replied) {
       await interaction.editReply({
-        files: [buildStatusCard('Bot Error', message, { type: 'error', badge: 'ERR' })],
+        embeds: [buildStatusCard('Bot Error', message, { type: 'error', badge: 'ERR' })],
       });
       return;
     }
 
     if (interaction.replied) {
       await interaction.followUp({
-        files: [buildStatusCard('Bot Error', message, { type: 'error', badge: 'ERR' })],
+        embeds: [buildStatusCard('Bot Error', message, { type: 'error', badge: 'ERR' })],
         ephemeral: true,
       });
       return;
     }
 
     await interaction.reply({
-      files: [buildStatusCard('Bot Error', message, { type: 'error', badge: 'ERR' })],
+      embeds: [buildStatusCard('Bot Error', message, { type: 'error', badge: 'ERR' })],
       ephemeral: true,
     });
   } catch (responseError) {
@@ -5976,11 +5413,6 @@ client.once(Events.ClientReady, async () => {
   console.log(`Logged in as ${client.user.tag}.`);
   if (clientId) {
     console.log(`Invite link: https://discord.com/api/oauth2/authorize?client_id=${clientId}&scope=applications.commands%20bot&permissions=${botPermissionBits.toString()}`);
-  }
-
-  if (process.platform !== 'win32') {
-    startReadableCardWorker();
-    warmReadableCardWorker();
   }
 
   await refreshBotOwnerIds();
@@ -6138,18 +5570,18 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.commandName === 'userlimit') {
       const memberVoiceChannel = interaction.member?.voice?.channel;
       if (!memberVoiceChannel) {
-        await interaction.reply({ files: [buildStatusCard('Voice Channel Capacity', 'Join a voice channel first, then use this command.', { type: 'error', badge: 'ERR' })] });
+        await interaction.reply({ embeds: [buildStatusCard('Voice Channel Capacity', 'Join a voice channel first, then use this command.', { type: 'error', badge: 'ERR' })] });
         return;
       }
 
       const ownerId = voiceChannelOwners.get(memberVoiceChannel.id);
       if (!ownerId) {
-        await interaction.reply({ files: [buildStatusCard('Voice Channel Capacity', 'This voice channel is no longer tracked by the bot.', { type: 'error', badge: 'ERR' })] });
+        await interaction.reply({ embeds: [buildStatusCard('Voice Channel Capacity', 'This voice channel is no longer tracked by the bot.', { type: 'error', badge: 'ERR' })] });
         return;
       }
 
       if (!canControlOwnedRoom(interaction, ownerId)) {
-        await interaction.reply({ files: [buildStatusCard('Voice Channel Capacity', 'Only the owner or bot access role can change this voice channel capacity.', { type: 'error', badge: 'ERR' })] });
+        await interaction.reply({ embeds: [buildStatusCard('Voice Channel Capacity', 'Only the owner or bot access role can change this voice channel capacity.', { type: 'error', badge: 'ERR' })] });
         return;
       }
 
@@ -6157,7 +5589,7 @@ client.on('interactionCreate', async (interaction) => {
       const sent = await sendCapacitySelector(memberVoiceChannel, interaction.member);
       await interaction.editReply({
         attachments: [],
-        files: [buildStatusCard('Voice Channel Capacity', sent
+        embeds: [buildStatusCard('Voice Channel Capacity', sent
           ? 'The selector has been posted for your voice channel.'
           : 'I could not post the selector for your voice channel.', {
           type: sent ? 'success' : 'error',
@@ -6200,12 +5632,12 @@ client.on('interactionCreate', async (interaction) => {
   const ownerId = voiceChannelOwners.get(voiceChannelId);
 
   if (!ownerId) {
-    await interaction.reply({ files: [buildStatusCard('Voice Channel Capacity', 'This voice channel is no longer available for capacity changes.', { type: 'error', badge: 'ERR' })], ephemeral: true });
+    await interaction.reply({ embeds: [buildStatusCard('Voice Channel Capacity', 'This voice channel is no longer available for capacity changes.', { type: 'error', badge: 'ERR' })], ephemeral: true });
     return;
   }
 
   if (!canControlOwnedRoom(interaction, ownerId)) {
-    await interaction.reply({ files: [buildStatusCard('Voice Channel Capacity', 'Only the owner or bot access role can change this voice channel capacity.', { type: 'error', badge: 'ERR' })], ephemeral: true });
+    await interaction.reply({ embeds: [buildStatusCard('Voice Channel Capacity', 'Only the owner or bot access role can change this voice channel capacity.', { type: 'error', badge: 'ERR' })], ephemeral: true });
     return;
   }
 
@@ -6213,7 +5645,7 @@ client.on('interactionCreate', async (interaction) => {
   const voiceChannel = guild?.channels.cache.get(voiceChannelId);
 
   if (!voiceChannel || voiceChannel.type !== ChannelType.GuildVoice) {
-    await interaction.reply({ files: [buildStatusCard('Voice Channel Capacity', 'That voice channel could not be found.', { type: 'error', badge: 'ERR' })], ephemeral: true });
+    await interaction.reply({ embeds: [buildStatusCard('Voice Channel Capacity', 'That voice channel could not be found.', { type: 'error', badge: 'ERR' })], ephemeral: true });
     return;
   }
 
@@ -6235,7 +5667,7 @@ client.on('interactionCreate', async (interaction) => {
     }
     await interaction.editReply({
       attachments: [],
-      files: [buildCapacityCard(selectedLimit)],
+      embeds: [buildCapacityCard(selectedLimit)],
       components: [],
     });
   } catch (error) {
