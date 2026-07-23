@@ -2500,22 +2500,32 @@ function buildCapacityCard(currentLimit) {
   }, 'capacity');
 }
 
+async function sendToVoiceChannelChat(voiceChannel, payload, logLabel) {
+  if (!voiceChannel || typeof voiceChannel.send !== 'function') {
+    return false;
+  }
+
+  try {
+    await voiceChannel.send(payload);
+    return true;
+  } catch (error) {
+    console.warn(`Could not send ${logLabel} into voice channel ${voiceChannel.name}:`, error);
+    return false;
+  }
+}
+
 async function sendCapacitySelector(voiceChannel, ownerMember) {
   const card = buildCapacityCard(voiceChannel.userLimit || 0);
   const row = buildCapacitySelector(voiceChannel.id);
 
-  const textChannel = findTextChannelForVoiceChannel(voiceChannel, voiceChannel.guild);
-  if (textChannel) {
-    try {
-      await textChannel.send({
-        content: `${ownerMember}`,
-        embeds: [card],
-        components: [row],
-      });
-      return true;
-    } catch (error) {
-      console.warn(`Could not send the capacity selector into ${textChannel.name}:`, error);
-    }
+  const sentToVoiceChat = await sendToVoiceChannelChat(voiceChannel, {
+    content: `${ownerMember}`,
+    embeds: [card],
+    components: [row],
+  }, 'the capacity selector');
+
+  if (sentToVoiceChat) {
+    return true;
   }
 
   try {
@@ -2631,19 +2641,14 @@ async function notifyNewOwner(voiceChannel, newOwner, options = {}) {
   }, 'owner-updated');
 
   const components = buildOwnerControlComponents(voiceChannel.id);
+  const sentToVoiceChat = await sendToVoiceChannelChat(voiceChannel, {
+    content: `${newOwner}`,
+    embeds: [card],
+    components,
+  }, 'the owner update');
 
-  const textChannel = findTextChannelForVoiceChannel(voiceChannel, voiceChannel.guild);
-  if (textChannel) {
-    try {
-      await textChannel.send({
-        content: `${newOwner}`,
-        embeds: [card],
-        components,
-      });
-      return;
-    } catch (error) {
-      console.warn(`Could not send the owner update into ${textChannel.name}:`, error);
-    }
+  if (sentToVoiceChat) {
+    return;
   }
 
   try {
@@ -2663,23 +2668,6 @@ async function notifyNewOwner(voiceChannel, newOwner, options = {}) {
     return;
   } catch (error) {
     console.warn(`Could not DM the new owner ${newOwner.user.tag}:`, error);
-  }
-  if (textChannel) {
-    await textChannel.send({
-      content: `${newOwner}`,
-      embeds: [createCardEmbed({
-        badge: 'OWN',
-        title: 'Voice Channel Owner Updated',
-        description,
-        fields: [{
-          name: 'Owner controls',
-          value: 'Use the user-limit selector below, or transfer ownership to another member in this room.',
-        }],
-        footer: 'Only the current room owner or bot access role can use these controls.',
-      }, 'owner-updated')],
-      components,
-    }).catch(() => {});
-    return;
   }
 
   await newOwner.user.send({
